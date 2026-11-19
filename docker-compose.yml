@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    ports:
+      - "8050:8000"
+    volumes:
+      - po-data:/app/data
+      # Private key for the Jetson edge target.  Set JETSON_SSH_KEY=$HOME/.ssh/id_ed25519
+      # before `docker compose up`; unset, the Jetson target is simply unavailable.
+      - ${JETSON_SSH_KEY:-/dev/null}:/run/secrets/jetson_key:ro
+    environment:
+      - PO_DATA_DIR=/app/data
+      - PO_CORS_ORIGINS=["http://localhost:8015","http://localhost"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/frontend/Dockerfile
+    ports:
+      - "8015:80"
+    depends_on:
+      - backend
+
+volumes:
+  po-data:

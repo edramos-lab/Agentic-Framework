@@ -1,0 +1,141 @@
+# ============================================================
+# PaperOrchestra — Example Pipeline Configuration
+# ============================================================
+# Copy this file, fill in your details, and run:
+#   paper-orchestra run --config pipeline_config.yaml --output ./my_paper
+# ============================================================
+
+# --- LLM Backend ---
+llm:
+  provider: "openai"          # "openai" or "anthropic"
+  model: "gpt-4o"             # or "claude-sonnet-4-20250514", etc.
+  api_key: ""                 # set via env var OPENAI_API_KEY or paste here
+  base_url: null              # override for local vLLM/Ollama
+  temperature: 0.3
+  max_tokens: 4096
+
+# --- Concurrency ---
+max_parallel: 3               # threads for Steps 2 + Experiments + 3
+
+# --- Research Idea (I) ---
+idea:
+  title: "PaperOrchestra: A Multi-Agent Framework for End-to-End Research Paper Generation"
+  abstract_draft: >
+    We present PaperOrchestra, a modular multi-agent system that automates
+    the full lifecycle of academic paper writing — from ideation to a
+    submission-ready PDF.  The pipeline coordinates five specialized agents:
+    an Outline Architect, a Plotting Agent, an Experimental Runs Agent,
+    a Literature Review Agent, a Section Writer, and an Iterative Refinement
+    loop guided by an automated reviewer.
+  research_questions:
+    - "Can a multi-agent LLM pipeline produce publication-quality manuscripts end-to-end?"
+    - "How does iterative agent-based review improve manuscript quality compared to single-pass generation?"
+    - "What is the effect of running experiments inside the pipeline on result integration quality?"
+  contributions:
+    - "A modular, extensible multi-agent architecture for paper writing"
+    - "Integration of automated experiment execution within the writing pipeline"
+    - "An iterative refinement loop with scored review feedback"
+  methodology_sketch: >
+    The system uses five sequential-and-parallel stages.  Step 1 builds a JSON outline.
+    Steps 2, 3, and a new Experimental Runs agent run in parallel.  Step 4 merges all
+    outputs into a LaTeX manuscript.  Step 5 iteratively refines via an AgentReview scorer.
+  keywords:
+    - multi-agent systems
+    - automated scientific writing
+    - LLM pipelines
+    - iterative refinement
+
+# --- Conference Guideline (G) ---
+guideline:
+  name: "NeurIPS 2025"
+  page_limit: 9
+  citation_style: "natbib"
+  abstract_word_limit: 250
+  sections_required:
+    - Introduction
+    - Related Work
+    - Methodology
+    - Experiments
+    - Results
+    - Discussion
+    - Conclusion
+
+# --- LaTeX Template (T) ---
+latex_template_path: "examples/inputs/template.tex"
+
+# --- Experimental Requirements (optional — remove to skip experiments) ---
+experiment_requirements:
+  datasets:
+    - "arxiv-abstracts-sample"
+  models:
+    - "gpt-4o"
+    - "claude-sonnet-4-20250514"
+  metrics:
+    - "BLEU"
+    - "BERTScore"
+    - "human_eval"
+  baselines:
+    - "single-pass-generation"
+    - "outline-then-write"
+  hardware: "1x A100 80GB"
+  scripts_dir: "./examples/experiments"
+  timeout_minutes: 60
+
+  backend: "colab"                # "colab" or "jetson"
+
+  # --- Jetson Orin Nano (SSH) ---
+  # Used when backend is "jetson".  Set host here or export JETSON_HOST.
+  jetson:
+    host: "100.96.228.9"          # override with the JETSON_HOST env var
+    user: "admin_ot"
+    port: 22
+    ssh_key: "~/.ssh/id_ed25519"
+    remote_dir: "/home/admin_ot/paper_orchestra"
+    python: "python3"
+    # Produced by examples/experiments/prepare_models.py (model.pt + model.onnx).
+    upload_files:
+      - "./bench_models/model.pt"
+      - "./bench_models/model.onnx"
+    env_vars:                     # read by triton_benchmark.py
+      BENCH_IMGSZ: "224"
+      BENCH_RUNS: "300"
+      BENCH_VARIANTS: "pt,onnx,trt_fp32,trt_fp16,trt_int8"
+
+  # --- Google Colab CLI Settings ---
+  colab:
+    enabled: true
+    gpu_type: "A100"              # T4 | L4 | G4 | H100 | A100
+    tpu_type: ""                  # v5e1 | v6e1 — leave empty for GPU
+    high_mem: false               # requires Colab Pro/Pro+
+    session_name: "paper-orchestra"
+    keep_session: true            # reuse one session across experiments
+    env_vars:
+      CUDA_VISIBLE_DEVICES: "0"
+      PYTHONUNBUFFERED: "1"
+    pip_packages:                 # installed on the Colab VM before runs
+      - "torch>=2.3"
+      - "transformers>=4.40"
+      - "evaluate"
+      - "bert-score"
+      - "datasets"
+    upload_files:                 # local files to upload before runs
+      - "./experiments/data/arxiv_sample.jsonl"
+    download_patterns:            # remote paths to always download after runs
+      - "/content/results/metrics.json"
+      - "/content/results/predictions.csv"
+
+# --- Per-Agent Overrides ---
+agents:
+  outline: {}
+  plotting: {}
+  experiment: {}
+  literature: {}
+  writing:
+    # Your own prose (a few .tex paragraphs from earlier chapters); the writing
+    # agent imitates it, following the thesis-voice-coach rules.
+    style_samples_path: "examples/inputs/my_writing_samples.txt"
+    style_samples_max_chars: 6000
+  review: {}
+  refinement:
+    max_cycles: 3
+    min_improvement: 0.2
