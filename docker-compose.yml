@@ -12,6 +12,9 @@ services:
       - ${JETSON_SSH_KEY:-/dev/null}:/run/secrets/jetson_key:ro
     environment:
       - PO_DATA_DIR=/app/data
+      # Optional: faster literature search. Leave unset to use the public rate limits.
+      - OPENALEX_MAILTO=${OPENALEX_MAILTO:-}
+      - S2_API_KEY=${S2_API_KEY:-}
       - PO_CORS_ORIGINS=["http://localhost:8015","http://localhost"]
 
   frontend:

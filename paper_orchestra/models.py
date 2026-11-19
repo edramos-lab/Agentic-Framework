@@ -191,6 +191,8 @@ class BibEntry(BaseModel):
     doi: str = ""
     abstract: str = ""
     bibtex: str = ""
+    source: str = ""  # openalex | semantic_scholar
+    scite: dict[str, Any] = Field(default_factory=dict)  # supporting / contradicting / mentioning counts
 
 
 class LiteratureReviewOutput(BaseModel):

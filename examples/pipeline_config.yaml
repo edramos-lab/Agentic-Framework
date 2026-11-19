@@ -129,7 +129,10 @@ agents:
   outline: {}
   plotting: {}
   experiment: {}
-  literature: {}
+  literature:
+    # OpenAlex needs no key; Semantic Scholar is a backup (set S2_API_KEY to avoid rate limits).
+    sources: ["openalex", "semantic_scholar"]
+    verify_with_scite: true       # drops retracted papers, records support/contradiction counts
   writing:
     # Your own prose (a few .tex paragraphs from earlier chapters); the writing
     # agent imitates it, following the thesis-voice-coach rules.
