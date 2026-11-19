@@ -161,8 +161,9 @@ class WritingAgent(BaseAgent):
             context_parts.append(
                 "# Experiment Results\n" + "\n".join(exp_summary)
             )
-            for exp_id, tex in state.experiment_output.latex_tables.items():
-                context_parts.append(f"# LaTeX table for {exp_id} (use verbatim)\n{tex}")
+            if "experiments" in kinds:  # discussion/conclusion cite the numbers but do not repeat the table
+                for exp_id, tex in state.experiment_output.latex_tables.items():
+                    context_parts.append(f"# LaTeX table for {exp_id} (use verbatim)\n{tex}")
 
         user_msg = "\n\n".join(context_parts)
         return self._prompt(self._system_prompt, user_msg, max_tokens=4096)
@@ -189,7 +190,12 @@ class WritingAgent(BaseAgent):
         body = "\n\n".join(sections)
 
         if "%CONTENT%" in template:
-            return template.replace("%CONTENT%", body)
+            # A bare %TITLE% would comment out the closing brace of \title{...}
+            title = state.outline.title if state.outline else state.inputs.idea.title
+            authors = state.inputs.idea.authors or "Anonymous Authors"
+            return (template.replace("%TITLE%", title)
+                            .replace("%AUTHORS%", authors)
+                            .replace("%CONTENT%", body))
 
         # Otherwise build a minimal document
         title = state.outline.title if state.outline else "Paper"

@@ -581,7 +581,8 @@ class ExperimentAgent(BaseAgent):
             if not variants:
                 continue
             rows = []
-            for key, v in variants.items():
+            ordered = sorted(variants.items(), key=lambda kv: list(labels).index(kv[0]) if kv[0] in labels else len(labels))
+            for key, v in ordered:
                 name = labels.get(key, key)
                 if v.get("status") != "success":
                     rows.append(f"{name} & \\multicolumn{{5}}{{c}}{{failed}} \\\\")

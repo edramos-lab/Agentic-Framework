@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import textwrap
+import time
 from pathlib import Path
 
 import httpx
@@ -76,17 +78,24 @@ class LiteratureAgent(BaseAgent):
 
     def _search_s2(self, query: str, limit: int = 5) -> list[dict]:
         """Search Semantic Scholar for papers matching *query*."""
-        try:
-            resp = httpx.get(
-                f"{S2_API}/paper/search",
-                params={"query": query, "limit": limit, "fields": S2_FIELDS},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return resp.json().get("data", [])
-        except Exception as exc:
-            self.logger.warning("S2 search failed for '%s': %s", query, exc)
-            return []
+        headers = {"x-api-key": os.environ["S2_API_KEY"]} if os.environ.get("S2_API_KEY") else {}
+        for attempt in range(4):
+            try:
+                resp = httpx.get(
+                    f"{S2_API}/paper/search",
+                    params={"query": query, "limit": limit, "fields": S2_FIELDS},
+                    headers=headers,
+                    timeout=30,
+                )
+                if resp.status_code == 429 and attempt < 3:
+                    time.sleep(2 ** attempt * 2)  # the public API rate-limits anonymous callers
+                    continue
+                resp.raise_for_status()
+                return resp.json().get("data", [])
+            except Exception as exc:
+                self.logger.warning("S2 search failed for '%s': %s", query, exc)
+                return []
+        return []
 
     @staticmethod
     def _paper_to_bib(paper: dict) -> BibEntry:

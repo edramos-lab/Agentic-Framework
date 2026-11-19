@@ -22,6 +22,7 @@ class IdeaSummary(BaseModel):
     contributions: list[str] = Field(default_factory=list)
     methodology_sketch: str = ""
     keywords: list[str] = Field(default_factory=list)
+    authors: str = ""  # goes into the template's %AUTHORS% slot; empty prints "Anonymous Authors"
 
 
 class ConferenceGuideline(BaseModel):

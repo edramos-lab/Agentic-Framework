@@ -1,0 +1,66 @@
+{
+  "device": "NVIDIA Jetson Orin Nano Developer Kit (R36 (release))",
+  "imgsz": 224,
+  "batch": 1,
+  "runs": 300,
+  "warmup": 50,
+  "image": "nvcr.io/nvidia/tritonserver:24.12-py3-igpu",
+  "int8_calibrated": false,
+  "variants": {
+    "onnx": {
+      "client_mean_ms": 13.910962586687674,
+      "client_std_ms": 0.3630242273692499,
+      "client_p50_ms": 13.843878500210849,
+      "client_p95_ms": 14.505750850503318,
+      "client_p99_ms": 15.257001999871134,
+      "fps": 71.88575152642323,
+      "server_compute_mean_ms": 9.699462093333333,
+      "status": "success",
+      "size_mb": 8.636342
+    },
+    "trt_fp32": {
+      "client_mean_ms": 8.519278446710814,
+      "client_std_ms": 0.31992798871619954,
+      "client_p50_ms": 8.500973000082013,
+      "client_p95_ms": 8.904020000500168,
+      "client_p99_ms": 9.619720930231779,
+      "fps": 117.38083292559682,
+      "server_compute_mean_ms": 3.624317703333334,
+      "status": "success",
+      "size_mb": 9.637404
+    },
+    "trt_fp16": {
+      "client_mean_ms": 7.565613503305333,
+      "client_std_ms": 0.21549042599822998,
+      "client_p50_ms": 7.551906000117015,
+      "client_p95_ms": 7.854814399570387,
+      "client_p99_ms": 8.163547819449374,
+      "fps": 132.1769873075212,
+      "server_compute_mean_ms": 2.6420276966666667,
+      "status": "success",
+      "size_mb": 5.338108
+    },
+    "trt_int8": {
+      "client_mean_ms": 8.02623010664623,
+      "client_std_ms": 0.6068555506878439,
+      "client_p50_ms": 8.002443999885145,
+      "client_p95_ms": 8.304975800183456,
+      "client_p99_ms": 8.673721149489209,
+      "fps": 124.59149397821729,
+      "server_compute_mean_ms": 3.10616941,
+      "status": "success",
+      "size_mb": 3.697676
+    },
+    "pt": {
+      "client_mean_ms": 14.070000489988766,
+      "client_std_ms": 0.6133366389809274,
+      "client_p50_ms": 14.003466000303888,
+      "client_p95_ms": 15.337050850075686,
+      "client_p99_ms": 16.70997257043382,
+      "fps": 71.07320292643419,
+      "server_compute_mean_ms": 10.516370790000002,
+      "status": "success",
+      "size_mb": 8.985094
+    }
+  }
+}
