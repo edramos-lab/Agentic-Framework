@@ -34,7 +34,11 @@ Rules:
 5. Return ONLY the Python code — no markdown fences.
 6. If the spec includes "Experiment data", plot ONLY those numbers, exactly as
    given.  Never invent, round or extrapolate measured values.
+7. Write every number into the script as a literal.  Never read any file (no
+   open(), json.load or pandas.read_*) — no data file exists when the script runs.
 """
+
+MAX_ATTEMPTS = 3
 
 
 class PlottingAgent(BaseAgent):
@@ -92,27 +96,27 @@ class PlottingAgent(BaseAgent):
         if results_json:
             user_msg += f"\nExperiment data (use exactly this):\n{results_json}\n"
 
-        code = self._prompt(SYSTEM_PROMPT, user_msg, max_tokens=4096)
-        # Sanitise: strip markdown fences
-        code = self._strip_fences(code)
-
-        # Prepend the output path constant
-        full_script = f'OUTPUT_PATH = "{out_path}"\n\n' + code
-
         script_path = self.agent_dir / f"{spec.figure_id}_plot.py"
-        script_path.write_text(full_script, encoding="utf-8")
-
-        # Execute the script
-        try:
-            subprocess.run(
-                [sys.executable, "-I", str(script_path)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            self.logger.warning("Figure %s script failed: %s", spec.figure_id, exc)
+        error = ""
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            msg = user_msg
+            if error:
+                msg += f"\nYour previous script failed with this error; fix it:\n{error[-1500:]}\n"
+            code = self._strip_fences(self._prompt(SYSTEM_PROMPT, msg, max_tokens=4096))
+            script_path.write_text(f'OUTPUT_PATH = "{out_path}"\n\n' + code, encoding="utf-8")
+            try:
+                subprocess.run(
+                    [sys.executable, "-I", str(script_path)],
+                    capture_output=True, text=True, timeout=60, check=True,
+                )
+                break
+            except subprocess.CalledProcessError as exc:
+                error = exc.stderr or str(exc)
+            except subprocess.TimeoutExpired as exc:
+                error = str(exc)
+            self.logger.warning("Figure %s script failed (attempt %d/%d): %s",
+                                spec.figure_id, attempt, MAX_ATTEMPTS, error.strip().splitlines()[-1] if error.strip() else "")
+        else:
             return None
 
         if not out_path.exists():

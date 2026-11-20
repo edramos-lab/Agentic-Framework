@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from ..base_agent import BaseAgent
-from ..utils.latex import dedupe_floats, disable_unused_bibliography, restrict_citations, strip_fences
+from ..utils.latex import dedupe_floats, drop_missing_figures, disable_unused_bibliography, restrict_citations, strip_fences
 from ..models import (
     GeneratedFigure,
     ManuscriptDraft,
@@ -94,6 +94,10 @@ class WritingAgent(BaseAgent):
             self.logger.warning("Removed %d citation(s) to keys not in the bibliography: %s",
                                 len(removed), ", ".join(sorted(set(removed))))
         full_latex = disable_unused_bibliography(full_latex)
+        have = {f.file_path.stem for f in (state.figures or [])}
+        full_latex, missing = drop_missing_figures(full_latex, have)
+        if missing:
+            self.logger.warning("Removed figure(s) with no generated image: %s", ", ".join(missing))
         full_latex, dupes = dedupe_floats(full_latex)
         if dupes:
             self.logger.warning("Removed %d duplicated figure/table environment(s)", dupes)

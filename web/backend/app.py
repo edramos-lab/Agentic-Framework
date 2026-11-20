@@ -15,6 +15,7 @@ Endpoints:
 
   GET    /api/pipeline/runs/{id}/artifacts  — list output files
   GET    /api/pipeline/runs/{id}/artifacts/{path} — download an artifact
+  GET    /api/pipeline/runs/{id}/overleaf.zip — manuscript, bibliography and figures for Overleaf
 """
 
 from __future__ import annotations
@@ -25,8 +26,9 @@ from pathlib import Path
 
 import aiofiles
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from paper_orchestra.utils.overleaf import NoManuscript, build_overleaf_zip
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .config import settings, vault
 from .runner import get_event_queue, get_run, list_runs, start_pipeline
@@ -222,3 +224,22 @@ async def download_artifact(run_id: str, path: str) -> FileResponse:
     if not file_path.exists():
         raise HTTPException(404, f"File not found: {path}")
     return FileResponse(file_path, filename=file_path.name)
+
+
+@app.get("/api/pipeline/runs/{run_id}/overleaf.zip")
+async def download_overleaf_zip(run_id: str) -> Response:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(404, f"Run '{run_id}' not found")
+    out_dir = Path(run.output_dir) if run.output_dir else None
+    if out_dir is None or not out_dir.exists():
+        raise HTTPException(404, "No output directory")
+    try:
+        data = build_overleaf_zip(out_dir)
+    except NoManuscript as exc:
+        raise HTTPException(409, str(exc))
+    return Response(
+        data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="paper-{run_id}-overleaf.zip"'},
+    )

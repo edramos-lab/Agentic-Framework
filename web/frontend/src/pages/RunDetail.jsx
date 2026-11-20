@@ -98,7 +98,19 @@ export default function RunDetail() {
   return (
     <div className="space-y-8">
       <PageHeader title={run.idea_title || `Run ${id}`} description={run.idea_title ? `Run ${id}` : undefined}>
-        <StatusBadge status={run.status} />
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusBadge status={run.status} />
+          {run.status === "completed" && (
+            <a
+              href={`/api/pipeline/runs/${id}/overleaf.zip`}
+              download
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            >
+              <IconDownload />
+              Download for Overleaf (.zip)
+            </a>
+          )}
+        </div>
       </PageHeader>
 
       {run.error && <Alert>{run.error}</Alert>}

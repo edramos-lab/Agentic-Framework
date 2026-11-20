@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 _CITE = re.compile(r"[ \t]*\\(cite[a-zA-Z]*)\s*(\[[^\]]*\])?\s*\{([^}]*)\}")
 
@@ -64,3 +65,24 @@ def dedupe_floats(latex: str) -> tuple[str, int]:
         return m.group(0)
 
     return _FLOAT.sub(check, latex), removed
+
+
+_GRAPHIC = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]*)\}")
+
+
+def drop_missing_figures(latex: str, available_stems: set[str]) -> tuple[str, list[str]]:
+    """Remove figure environments whose image is not among available_stems (file names without extension).
+
+    Returns the new source and the image names that were missing.
+    """
+    missing: list[str] = []
+
+    def check(m: re.Match) -> str:
+        for ref in _GRAPHIC.findall(m.group(0)):
+            if Path(ref).stem not in available_stems:
+                missing.append(ref)
+                return ""
+        return m.group(0)
+
+    fig = re.compile(r"\\begin\{(figure\*?)\}.*?\\end\{\1\}", re.S)
+    return fig.sub(check, latex), missing
