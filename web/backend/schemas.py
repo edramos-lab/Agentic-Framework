@@ -62,7 +62,10 @@ class JetsonInput(BaseModel):
     ssh_key: str = "~/.ssh/id_ed25519"
     remote_dir: str = "/home/jetson/paper_orchestra"
     python: str = "python3"
-    env_vars: dict[str, str] = Field(default_factory=dict)
+    # Models already on the Jetson, read by examples/experiments/triton_benchmark.py
+    env_vars: dict[str, str] = Field(
+        default_factory=lambda: {"BENCH_MODEL_DIR": "/home/admin_ot/paper_orchestra/effvit_b0"}
+    )
     upload_files: list[str] = Field(default_factory=list)
 
 

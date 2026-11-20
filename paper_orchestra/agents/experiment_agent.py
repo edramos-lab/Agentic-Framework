@@ -238,6 +238,15 @@ class ExperimentAgent(BaseAgent):
                                 result.metrics.update(json.loads(local.read_text()))
                             except (json.JSONDecodeError, OSError):
                                 pass
+                if not result.metrics:
+                    # The planned output file may not match what the script writes; the
+                    # benchmark also prints its results as JSON, so read them from stdout.
+                    parsed = self._json_from_stdout(proc.stdout)
+                    if parsed:
+                        saved = artifact_dir / "stdout_metrics.json"
+                        saved.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+                        result.artifacts.append(saved)
+                        result.metrics.update(parsed)
                 result.device = result.metrics.get("device", result.device)
         except subprocess.TimeoutExpired:
             result.status = "failed"
@@ -248,6 +257,18 @@ class ExperimentAgent(BaseAgent):
 
         result.finished_at = datetime.now(timezone.utc)
         return result
+
+    @staticmethod
+    def _json_from_stdout(text: str) -> dict:
+        """Return the JSON object a script printed to stdout, or {} when there is none."""
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     # ----- Colab CLI helpers -------------------------------------------------
 

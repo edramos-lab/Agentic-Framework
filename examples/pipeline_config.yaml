@@ -97,6 +97,7 @@ experiment_requirements:
       - "./bench_models/model.pt"
       - "./bench_models/model.onnx"
     env_vars:                     # read by triton_benchmark.py
+      BENCH_MODEL_DIR: "/home/admin_ot/paper_orchestra/effvit_b0"   # models already on the Jetson
       BENCH_IMGSZ: "224"
       BENCH_RUNS: "300"
       BENCH_VARIANTS: "pt,onnx,trt_fp32,trt_fp16,trt_int8"

@@ -186,7 +186,19 @@ def device_label() -> str:
     return f"{model} ({rel})"
 
 
+def stage_models() -> None:
+    """Copy model files from BENCH_MODEL_DIR (already on the Jetson) into the working directory."""
+    src = os.environ.get("BENCH_MODEL_DIR")
+    if not src:
+        return
+    for name in ("model.pt", "model.onnx", "model.onnx.data", "calib.cache"):
+        f = Path(src) / name
+        if f.exists() and not (WORK / name).exists():
+            shutil.copy(f, WORK / name)
+
+
 def main() -> None:
+    stage_models()
     results: dict = {
         "device": device_label(), "imgsz": IMGSZ, "batch": 1, "runs": RUNS, "warmup": WARMUP,
         "image": IMAGE, "int8_calibrated": (WORK / "calib.cache").exists(), "variants": {},
