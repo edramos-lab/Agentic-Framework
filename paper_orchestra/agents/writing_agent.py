@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from ..base_agent import BaseAgent
+from ..utils.latex import dedupe_floats, disable_unused_bibliography, restrict_citations, strip_fences
 from ..models import (
     GeneratedFigure,
     ManuscriptDraft,
@@ -59,6 +60,9 @@ Voice (the author's own, not generic academic prose):
 - Do not overclaim.  If differences fall inside overlapping confidence
   intervals, say the results are equivalent rather than naming a winner.
 - Keep equations, tables and numbers exactly as given.
+- Describe only work the Experiment Results show.  If no training experiment ran, do not
+  say the model was trained in this study; say it was a pre-trained model that was benchmarked.
+  Report no accuracy figure unless a result gives one.
 """
 
 
@@ -83,6 +87,16 @@ class WritingAgent(BaseAgent):
 
         # Assemble full document
         full_latex = self._assemble(state, template_text, section_texts)
+
+        valid = {e.cite_key for e in state.literature.bib_entries} if state.literature else set()
+        full_latex, removed = restrict_citations(full_latex, valid)
+        if removed:
+            self.logger.warning("Removed %d citation(s) to keys not in the bibliography: %s",
+                                len(removed), ", ".join(sorted(set(removed))))
+        full_latex = disable_unused_bibliography(full_latex)
+        full_latex, dupes = dedupe_floats(full_latex)
+        if dupes:
+            self.logger.warning("Removed %d duplicated figure/table environment(s)", dupes)
 
         out_path = self._write("manuscript.tex", full_latex)
 
@@ -136,6 +150,12 @@ class WritingAgent(BaseAgent):
 
         kinds = self._section_kinds(plan)
 
+        entries = state.literature.bib_entries if state.literature else []
+        context_parts.append(
+            "# Citable references (cite ONLY these keys with \\cite{key}; if none fits a claim, cite nothing)\n"
+            + ("\n".join(f"- {e.cite_key}: {e.title} ({e.year})" for e in entries) or "(none available — do not cite)")
+        )
+
         # Add literature if relevant
         if state.literature and kinds & {"intro", "related"}:
             if "intro" in kinds and state.literature.intro_paragraphs:
@@ -166,7 +186,7 @@ class WritingAgent(BaseAgent):
                     context_parts.append(f"# LaTeX table for {exp_id} (use verbatim)\n{tex}")
 
         user_msg = "\n\n".join(context_parts)
-        return self._prompt(self._system_prompt, user_msg, max_tokens=4096)
+        return strip_fences(self._prompt(self._system_prompt, user_msg, max_tokens=4096))
 
     @staticmethod
     def _section_kinds(plan: WritingPlanSection) -> set[str]:

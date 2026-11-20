@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 from ..base_agent import BaseAgent
+from ..utils.latex import escape_bibtex
 from ..models import BibEntry, LiteratureReviewOutput, PipelineState, ResearchNode
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,7 @@ class LiteratureAgent(BaseAgent):
         authors = [a.get("name", "") for a in paper.get("authors", [])]
         year = paper.get("year")
         title = paper.get("title", "Untitled")
-        venue = paper.get("venue", "")
+        venue = paper.get("venue", "") or ""
         doi = (paper.get("externalIds") or {}).get("DOI", "")
         abstract = paper.get("abstract", "") or ""
 
@@ -244,10 +245,10 @@ class LiteratureAgent(BaseAgent):
 
         bibtex = textwrap.dedent(f"""\
             @article{{{cite_key},
-              title  = {{{title}}},
-              author = {{{' and '.join(authors)}}},
+              title  = {{{escape_bibtex(title)}}},
+              author = {{{escape_bibtex(' and '.join(authors))}}},
               year   = {{{year or ''}}},
-              journal = {{{venue}}},
+              journal = {{{escape_bibtex(venue)}}},
               doi    = {{{doi}}},
             }}""")
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..base_agent import BaseAgent
+from ..utils.latex import dedupe_floats, disable_unused_bibliography, restrict_citations, strip_fences
 from ..models import (
     ManuscriptDraft,
     PipelineState,
@@ -28,7 +29,13 @@ You are a Content Refinement agent for academic papers.  Given:
 Revise the manuscript to address ALL suggestions.  Improve clarity,
 strengthen arguments, fix any issues.  Keep the overall structure intact.
 
-Return the COMPLETE revised LaTeX source — not a diff, the full document.
+Rules:
+- Keep every number, table and equation exactly as given.
+- Do not add citations; keep only the \\cite keys already in the manuscript.
+- Do not claim results, training or experiments the manuscript does not already report.
+
+Return the COMPLETE revised LaTeX source — not a diff, the full document, from
+\\documentclass through \\end{document}, with no markdown fences.
 """
 
 
@@ -84,7 +91,7 @@ class RefinementAgent(BaseAgent):
 
             # Refine based on feedback
             if cycle < self.max_cycles:  # Don't refine after last review
-                current_latex = self._refine(current_latex, score)
+                current_latex = self._refine(current_latex, score, self._valid_keys(state))
                 self._write(f"manuscript_v{cycle + 1}.tex", current_latex)
 
             prev_score = score.overall_score
@@ -104,16 +111,30 @@ class RefinementAgent(BaseAgent):
 
     # ----- refinement --------------------------------------------------------
 
-    def _refine(self, latex: str, score: ReviewScore) -> str:
+    @staticmethod
+    def _valid_keys(state: PipelineState) -> set[str]:
+        return {e.cite_key for e in state.literature.bib_entries} if state.literature else set()
+
+    def _refine(self, latex: str, score: ReviewScore, valid_keys: set[str]) -> str:
         """Apply one round of refinement based on review feedback."""
         user_msg = (
-            f"# Current Manuscript\n```latex\n{latex[:15000]}\n```\n\n"
+            f"# Current Manuscript\n```latex\n{latex}\n```\n\n"
             f"# Reviewer Feedback (score: {score.overall_score}/10)\n"
             f"{score.feedback}\n\n"
             f"# Specific Suggestions\n"
             + "\n".join(f"- {s}" for s in score.suggestions)
         )
-        return self._prompt(REFINE_SYSTEM, user_msg, max_tokens=16000)
+        revised = strip_fences(self._prompt(REFINE_SYSTEM, user_msg, max_tokens=16000))
+        if "\\end{document}" not in revised:
+            self.logger.warning("Refined manuscript is incomplete (no \\end{document}); keeping the previous version.")
+            return latex
+        revised, removed = restrict_citations(revised, valid_keys)
+        if removed:
+            self.logger.warning("Removed citations to unknown keys: %s", ", ".join(sorted(set(removed))))
+        revised, dupes = dedupe_floats(revised)
+        if dupes:
+            self.logger.warning("Removed %d duplicated figure/table environment(s)", dupes)
+        return disable_unused_bibliography(revised)
 
     # ----- PDF compilation ---------------------------------------------------
 
