@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from ..base_agent import BaseAgent
+from ..domains import MICROSCOPY, domain_of
 from ..utils.metrics import compact_metrics
 from ..utils.latex import fix_undefined_refs, close_cut_off, looks_cut_off, dedupe_floats, drop_missing_figures, disable_unused_bibliography, restrict_citations, strip_fences
 from ..models import (
@@ -19,7 +20,7 @@ from ..models import (
     WritingPlanSection,
 )
 
-SYSTEM_PROMPT = """\
+BASE_PROMPT = """\
 You are a scientific manuscript writer.  Given a section plan, relevant
 literature paragraphs, figure references, and experiment results, write
 the LaTeX content for that section.
@@ -45,21 +46,9 @@ Experiment reporting:
   do not describe it as pure INT8.  If INT8 was built without a calibration cache, say the INT8 numbers show
   speed only and that accuracy was not validated.
 - Do not name a winner when the gap is inside one standard deviation.
-
-Background and morphology (the question of whether the model reads the cells or the stain):
-- "dataset_stats" holds the statistics of the training backgrounds before any training: per-class
-  background colour, Kruskal-Wallis tests, and a linear classifier given only the background or only
-  the cells (cross-validated, with a permutation test).  Say what it measured and give its numbers;
-  never claim more than the tests support.
-- "morphology_probe" holds two models, "baseline" (no augmentation) and "augmented" (training images
-  re-rendered on four stain protocols), both probed on the same test images.  Only the protocols listed
-  under "held_out" were never used in training; the verdict about robustness rests on those, not on the
-  four "train" protocols.  Quote each model's "verdict" and the "comparison" verdict, the confidence
-  intervals and the McNemar p-values; do not describe a difference as real when its interval or p-value
-  does not support it.
-- The stain protocols are synthetic approximations of Romanowsky stains, not real stained slides; say so.
-- The augmented model is the one deployed to the Jetson; the baseline was not benchmarked there.
 """
+
+SYSTEM_PROMPT = BASE_PROMPT + MICROSCOPY.writer_notes  # the leukemia prompt, unchanged
 
 # Voice rules follow the thesis-voice-coach skill: write like the author, not like a
 # polished model.  Equations, tables and reported numbers stay verbatim.
@@ -94,7 +83,7 @@ class WritingAgent(BaseAgent):
             return state
 
         template_text = self._read_template(state.inputs.latex_template_path)
-        self._system_prompt = self._build_system_prompt()
+        self._system_prompt = self._build_system_prompt(domain_of(state.inputs.experiment_requirements))
 
         # Write each section
         section_texts: list[str] = []
@@ -145,17 +134,18 @@ class WritingAgent(BaseAgent):
 
     # ----- voice -------------------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
-        """Append the author's voice rules and writing samples when configured."""
+    def _build_system_prompt(self, domain=MICROSCOPY) -> str:
+        """The base rules plus the domain's reporting rules; append the author's voice rules and writing samples when configured."""
+        prompt = BASE_PROMPT + domain.writer_notes
         samples_path = self.config.get("style_samples_path")
         if not samples_path:
-            return SYSTEM_PROMPT
+            return prompt
         path = Path(samples_path)
         if not path.exists():
             self.logger.warning("style_samples_path not found: %s", path)
-            return SYSTEM_PROMPT
+            return prompt
         samples = path.read_text(encoding="utf-8")[: self.config.get("style_samples_max_chars", 6000)]
-        return f"{SYSTEM_PROMPT}{VOICE_RULES}\n# Author writing samples\n{samples}\n"
+        return f"{prompt}{VOICE_RULES}\n# Author writing samples\n{samples}\n"
 
     # ----- per-section writing -----------------------------------------------
 

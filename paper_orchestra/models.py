@@ -62,6 +62,15 @@ class JetsonConfig(BaseModel):
     connect_timeout: int = 10
 
 
+class DatasetSpec(BaseModel):
+    """The dataset the experiments use (the form's Dataset section); the defaults are the leukemia study."""
+    domain: str = "microscopy"  # which experiment recipe runs: microscopy | photos (paper_orchestra/domains.py)
+    source: str = "kaggle"  # kaggle | zenodo | local
+    id: str = "mehradaria/leukemia"  # Kaggle slug or Zenodo record id
+    split: str = "official"  # official | random
+    group_regex: str = ""  # what in a file name is the capture session or subject (default: a date)
+
+
 class ExperimentRequirements(BaseModel):
     """Specification for experiments to run (new input)."""
     datasets: list[str] = Field(default_factory=list)
@@ -76,6 +85,7 @@ class ExperimentRequirements(BaseModel):
     colab: ColabConfig = Field(default_factory=ColabConfig)
     jetson: JetsonConfig = Field(default_factory=JetsonConfig)
     reuse_run_dir: str = ""  # folder of a finished run: experiments whose outputs it holds are not run again
+    dataset: DatasetSpec = Field(default_factory=DatasetSpec)
 
 
 class PipelineInputs(BaseModel):

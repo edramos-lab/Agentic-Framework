@@ -21,7 +21,11 @@ VARIANT_LABELS = {
 }
 PROBE_LABELS = {
     "original": "original", "cells_masked": "cells masked", "cells_only": "cells only",
-    "scale_bar_masked": "scale bar masked",
+    "scale_bar_masked": "scale bar masked", "person_masked": "person masked", "person_only": "person only",
+}
+BACKBONE_NAMES = {
+    "efficientvit_b0.r224_in1k": "EfficientViT-B0", "mobilenetv3_large_100": "MobileNetV3-L", "resnet50": "ResNet-50",
+    "convnext_tiny": "ConvNeXt-T", "majority_class": "majority class",
 }
 
 
@@ -139,6 +143,7 @@ def probe_bars(metrics: dict, out: Path) -> None:
     order = [c for c in PROBE_LABELS if c in first]
     order += sorted((c for c in first if c.startswith("bg_")), key=lambda c: (held(c), c))
     order += sorted((c for c in first if c.startswith("stain_")), key=lambda c: (held(c), c))
+    order += [c for c in first if c not in order]  # conditions a domain adds (grayscale, blur, person_box_crop, ...)
     label = lambda c: PROBE_LABELS.get(c) or c.replace("bg_", "bg: ").replace("stain_", "stain: ").replace("_", " ")
     n = len(models)
     width = 0.8 / n
@@ -165,6 +170,35 @@ def probe_bars(metrics: dict, out: Path) -> None:
     ax.grid(axis="y", alpha=0.3)
     ax.legend(fontsize=7, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=n + 1, frameon=False,
               title="hatched bars: stain protocols never seen in training", title_fontsize=7)
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+
+def cv_comparison(metrics: dict, out: Path) -> None:
+    """Backbones and reference rows from the cross-validation: balanced accuracy (95% interval) and macro-F1."""
+    rows = {**metrics.get("backbones", {}), **metrics.get("references", {})}
+    if not rows:
+        raise NoData("no cross-validation results")
+    pretty_name = lambda n: BACKBONE_NAMES.get(n) or ("linear probe, frozen " + BACKBONE_NAMES.get(n.split("frozen_", 1)[-1], n.split("frozen_", 1)[-1]) if n.startswith("linear_probe") else n.replace("_", " "))
+    names = [pretty_name(n) + (" *" if n == metrics.get("selected") else "") for n in rows]
+    bal = np.array([d["balanced_accuracy"]["mean"] for d in rows.values()])
+    err = np.array([[d["balanced_accuracy"]["mean"] - d["balanced_accuracy"]["ci95"][0], d["balanced_accuracy"]["ci95"][1] - d["balanced_accuracy"]["mean"]]
+                    if "ci95" in d["balanced_accuracy"] else [0, 0] for d in rows.values()]).T
+    f1 = np.array([d["macro_f1"]["mean"] for d in rows.values()])
+    y = np.arange(len(rows))
+    fig, ax = plt.subplots(figsize=(7.0, 0.55 * len(rows) + 1.6))
+    ax.barh(y - 0.19, bal, 0.36, xerr=err, capsize=2, color="#4c72b0", label="balanced accuracy (95% CI)", error_kw={"linewidth": 0.8})
+    ax.barh(y + 0.19, f1, 0.36, color="#dd8452", label="macro-F1")
+    k = len(metrics.get("classes", [])) or 4
+    ax.axvline(1 / k, color="k", linestyle="--", linewidth=0.9, label=f"chance ({1 / k:.2f})")
+    ax.set_yticks(y, names, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 1.0)
+    ax.set_xlabel("out-of-fold score (selected model marked *)", fontsize=8)
+    ax.tick_params(axis="x", labelsize=7)
+    ax.grid(axis="x", alpha=0.3)
+    ax.legend(fontsize=7, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, frameon=False)
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight", dpi=300)
     plt.close(fig)
@@ -203,3 +237,5 @@ RENDERERS: dict[str, tuple[Callable[[dict, Path], None], Callable[[dict], bool]]
         k in (m.get("history", m)) for k in ("train_loss", "val_loss", "train_acc", "val_acc"))),
 }
 RENDERERS["training_curves_baseline"] = RENDERERS["training_curves"]
+RENDERERS["shortcut_probe"] = RENDERERS["morphology_probe"]  # the photographs domain's name for the same chart
+RENDERERS["cv_comparison"] = (cv_comparison, lambda m: bool(m.get("backbones")))

@@ -125,6 +125,7 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
             ConferenceGuideline,
             ExperimentRequirements,
             IdeaSummary,
+            DatasetSpec,
             JetsonConfig,
             PipelineInputs,
         )
@@ -184,6 +185,7 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
                 timeout_minutes=er.timeout_minutes,
                 backend=er.backend,
                 reuse_run_dir=_reuse_dir(er.reuse_run_id),
+                dataset=DatasetSpec(**er.dataset.model_dump()),
                 jetson=_jetson_config(er),
                 colab=ColabConfig(
                     enabled=er.colab.enabled,
@@ -297,6 +299,11 @@ def _jetson_config(er) -> JetsonConfig:
     from paper_orchestra.models import JetsonConfig
 
     cfg = JetsonConfig(**er.jetson.model_dump())
+    from paper_orchestra.domains import DOMAINS
+
+    preprocess = DOMAINS.get(er.dataset.domain, DOMAINS["microscopy"]).preprocess
+    if preprocess != "squash":  # the Jetson must prepare images the way the trainer did (letterbox for photographs)
+        cfg.env_vars["PREPROCESS"] = preprocess
     if er.colab.enabled:  # Colab trains the model and the data come from Kaggle through it, not from the Jetson's copy
         for name in ("BENCH_MODEL_DIR", "BENCH_TEST_DIR", "BENCH_CALIB_DIR"):
             cfg.env_vars.pop(name, None)

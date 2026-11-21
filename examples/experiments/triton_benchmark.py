@@ -221,7 +221,15 @@ def load_test_set(root: str) -> tuple[list[Path], np.ndarray, list[str]]:
 
 
 def preprocess_rgb(rgb: np.ndarray) -> np.ndarray:
-    """uint8 HxWx3 RGB -> float32 1x3xSxS, resized and normalised like the training eval transform."""
+    """uint8 HxWx3 RGB -> float32 1x3xSxS, resized and normalised like the training eval transform.
+
+    PREPROCESS=letterbox (set for photographs) keeps the aspect ratio and pads, through imgprep.py, the one path the
+    trainer and the probe use too; the default is the straight resize the leukemia experiments use.
+    """
+    if os.environ.get("PREPROCESS", "squash") == "letterbox":
+        import imgprep
+
+        return imgprep.preprocess_rgb(rgb, IMGSZ, "letterbox")
     from PIL import Image
 
     img = Image.fromarray(rgb).resize((IMGSZ, IMGSZ), Image.BILINEAR)
@@ -307,6 +315,7 @@ def accuracy_report(logits: np.ndarray, y: np.ndarray, classes: list[str]) -> di
         "accuracy": round(float((pred == y).mean()), 4), "macro_f1": round(macro_f1(cm), 4),
         "macro_auc": round(float(np.mean(aucs)), 4),
         "confusion_matrix": cm.tolist(),
+        "predictions": pred.tolist() if len(pred) <= 2000 else None,  # to compare with the model that was trained
         "roc": {"fpr": [round(float(v), 5) for v in grid], "macro_tpr": [round(float(v), 5) for v in np.mean(tprs, axis=0)],
                 "classes": roc},
     }

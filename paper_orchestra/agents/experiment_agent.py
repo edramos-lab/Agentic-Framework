@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..base_agent import BaseAgent
+from ..domains import domain_of
 from ..utils.metrics import compact_metrics
 from ..models import (
     ColabConfig,
@@ -53,6 +54,8 @@ class ExperimentAgent(BaseAgent):
             return state
 
         exp_reqs = state.inputs.experiment_requirements
+        self._dataset = exp_reqs.dataset if exp_reqs else None
+        self._domain = domain_of(exp_reqs)
         timeout = exp_reqs.timeout_minutes * 60 if exp_reqs else 7200
         colab_cfg = exp_reqs.colab if exp_reqs else ColabConfig()
         jetson_cfg = exp_reqs.jetson if exp_reqs else JetsonConfig()
@@ -130,6 +133,7 @@ class ExperimentAgent(BaseAgent):
         if shared_session and not colab_cfg.keep_session:
             self._stop_session(shared_session)
 
+        self._cross_check(results)
         history = self._supplied_history(scripts_dir)
         if history:
             results.append(history)
@@ -188,6 +192,31 @@ class ExperimentAgent(BaseAgent):
                 colab_session=f"reused:{prev.name}", artifacts=artifacts, metrics=metrics, started_at=now, finished_at=now)
             self.logger.info("  %s (%s): reused from run %s", plan.experiment_id, plan.script, prev.name)
         return out
+
+    def _dataset_env(self) -> dict[str, str]:
+        """The form's dataset section as env vars for the Colab scripts (nothing for the leukemia recipe, whose scripts read none)."""
+        d, dom = getattr(self, "_dataset", None), getattr(self, "_domain", None)
+        if d is None or dom is None or dom.name == "microscopy":
+            return {}
+        env = {"DATASET_SOURCE": d.source, "DATASET_ID": d.id, "SPLIT": d.split, "PREPROCESS": dom.preprocess, **dom.env}
+        if d.group_regex:
+            env["GROUP_REGEX"] = d.group_regex
+        return env
+
+    @staticmethod
+    def _cross_check(results: list[ExperimentResult]) -> None:
+        """Say whether the Jetson's predictions equal those of the trained model on the same test images."""
+        trained = next((r for r in results if r.status == "success" and r.metrics.get("predictions") and r.metrics.get("backbone")), None)
+        bench = next((r for r in results if r.status == "success" and r.metrics.get("variants")), None)
+        if not trained or not bench:
+            return
+        ref, out = trained.metrics["predictions"], {}
+        for key, v in bench.metrics["variants"].items():
+            pred = (v.get("accuracy") or {}).get("predictions")
+            if pred is not None and len(pred) == len(ref):
+                out[key] = {"equal": int(sum(a == b for a, b in zip(pred, ref))), "n": len(ref)}
+        if out:
+            bench.metrics["agreement_with_colab_test_predictions"] = out
 
     def _skip_target(self, plans, targets: dict[str, str], target: str, why: str) -> None:
         """Drop every plan aimed at an unavailable target and tell the UI why."""
@@ -523,6 +552,18 @@ class ExperimentAgent(BaseAgent):
 
     # ----- running a long script on Colab -----------------------------------
 
+    def _upload_secret_file(self, session: str, secret: str, remote: str) -> None:
+        """Send a secret to the VM as a file (uploads are logged by name only; executed code is logged in full)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / Path(remote).name
+            f.write_text(secret)
+            f.chmod(0o600)
+            r = self._run_cmd(["colab", "upload", "-s", session, str(f), remote], timeout=120)
+        if r.returncode != 0:
+            raise RuntimeError(f"could not send {Path(remote).name} to Colab: " + (r.stderr or r.stdout).strip()[-200:])
+
     def _upload_kaggle_token(self, session: str) -> None:
         """Send the Kaggle token to the VM as a file: file uploads are logged by name only, executed code is logged in full."""
         import json as _json
@@ -707,8 +748,11 @@ class ExperimentAgent(BaseAgent):
             # Files produced by the experiments this one depends on (e.g. the packed training images)
             sources = "\n".join(f.read_text(encoding="utf-8", errors="ignore")
                                for f in [script_path, *self._sibling_imports(script_path)])
-            if "kaggle_data" in sources and os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
+            source = getattr(self._dataset, "source", "kaggle")  # a token goes only to a session whose data come from that service
+            if "kaggle_data" in sources and source == "kaggle" and os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
                 self._upload_kaggle_token(session_name)
+            if "zenodo_data" in sources and source == "zenodo" and os.environ.get("ZENODO_TOKEN"):
+                self._upload_secret_file(session_name, os.environ["ZENODO_TOKEN"], "/content/zenodo_token")
             for extra in carried or []:
                 # a 185 MB test-image zip or a model the script never reads is not worth a minute of upload
                 if Path(extra).is_file() and Path(extra).name in sources:
@@ -724,7 +768,7 @@ class ExperimentAgent(BaseAgent):
             # --- 3. Run the script in the background on the VM and poll it ---
             self.logger.info("  Executing on Colab: %s", plan.script)
             # no Colab-secret lookup that times out; scripts that can run on the Jetson or on Colab are told which they are on
-            env = {**colab_cfg.env_vars, "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1", "PROBE_BACKEND": "torch"}
+            env = {**colab_cfg.env_vars, "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1", "PROBE_BACKEND": "torch", **self._dataset_env()}
             proc = self._run_colab_background(session_name, plan, remote_script, script_args, env, timeout)
             duration = time.perf_counter() - t0
 
@@ -888,8 +932,13 @@ class ExperimentAgent(BaseAgent):
             probe_tex = self._probe_table(r.metrics) if r.status == "success" else ""
             if probe_tex:
                 self._write(f"{r.experiment_id}_probe_table.tex", probe_tex)
-                tables[f"{r.experiment_id} morphology probe"] = probe_tex
+                name = "shortcut probe" if getattr(self, "_domain", None) is not None and self._domain.name == "photos" else "morphology probe"
+                tables[f"{r.experiment_id} {name}"] = probe_tex
             for key, tex in (self._stats_tables(r.metrics) if r.status == "success" else {}).items():
+                self._write(f"{r.experiment_id}_{key.replace(' ', '_')}_table.tex", tex)
+                tables[f"{r.experiment_id} {key}"] = tex
+            more = {**self._cv_tables(r.metrics), **self._audit_tables(r.metrics)} if r.status == "success" else {}
+            for key, tex in more.items():
                 self._write(f"{r.experiment_id}_{key.replace(' ', '_')}_table.tex", tex)
                 tables[f"{r.experiment_id} {key}"] = tex
         return tables
@@ -914,6 +963,56 @@ class ExperimentAgent(BaseAgent):
         return tex + "\\end{tabular}\n"
 
     @staticmethod
+    def _cv_tables(metrics: dict) -> dict[str, str]:
+        """Backbones compared by cross-validation (with the reference rows), and the single scoring of the final model."""
+        if "backbones" not in metrics or "references" not in metrics:
+            return {}
+        rows, ci = [], lambda d: f"{d['mean']:.3f} [{d['ci95'][0]:.2f}, {d['ci95'][1]:.2f}]" if "ci95" in d else f"{d['mean']:.3f}"
+        for name, d in {**metrics["backbones"], **metrics["references"]}.items():
+            mark = "$^{\\dagger}$" if name == metrics.get("selected") else ""
+            rows.append(f"{name.replace('_', ' ')}{mark} & {ci(d['balanced_accuracy'])} & {d['macro_f1']['mean']:.3f} & {ci(d['accuracy'])} & "
+                        f"{d['macro_auc']['mean']:.3f} & {d['ece']['mean']:.3f} \\\\")
+        t1 = ("\\begin{tabular}{lccccc}\n\\hline\nModel & Balanced accuracy [95\\% CI] & Macro-F1 & Accuracy [95\\% CI] & Macro-AUC & ECE \\\\\n\\hline\n"
+              + "\n".join(rows) + "\n\\hline\n\\multicolumn{6}{l}{\\footnotesize $^{\\dagger}$ selected by balanced accuracy; "
+              "out-of-fold, averaged over repeats.} \\\\\n\\end{tabular}\n")
+        out = {"cross-validation": t1}
+        if metrics.get("predictions") and metrics.get("true"):
+            classes = [c.replace("_", " ") for c in metrics["classes"]]
+            rec = " & ".join("n/a" if r is None else f"{r:.2f}" for r in metrics.get("per_class_recall", []))
+            lo, hi = metrics.get("accuracy_ci95", [float("nan")] * 2)
+            out["test split"] = ("\\begin{tabular}{l" + "c" * (len(classes) + 2) + "}\n\\hline\nImages & Accuracy [95\\% CI] & " + " & ".join(f"Recall {c}" for c in classes)
+                                 + f" \\\\\n\\hline\n{metrics['n_test']} & {metrics['accuracy']:.3f} [{lo:.2f}, {hi:.2f}] & {rec} \\\\\n\\hline\n\\end{{tabular}}\n")
+        return out
+
+    @staticmethod
+    def _audit_tables(metrics: dict) -> dict[str, str]:
+        """The photograph audit: per-class statistics of a few features, and what classifiers learn from each feature group."""
+        if "classifiers" not in metrics or "per_class" not in metrics or "features" not in metrics:
+            return {}
+        classes = metrics["classes"]
+        feats = [("bg_L", "Background $L^*$"), ("bg_a", "Background $a^*$"), ("bg_b", "Background $b^*$"), ("person_fraction", "Person area share"),
+                 ("person_box_aspect", "Person box height/width"), ("log_file_bytes", "Log file size"), ("capture_day", "Capture day")]
+        rows = []
+        for key, label in feats:
+            if key not in metrics["features"]:
+                continue
+            f = metrics["features"][key]
+            vals = " & ".join(f"{metrics['per_class'][c][key]['mean']:.2f} $\\pm$ {metrics['per_class'][c][key]['std']:.2f}" for c in classes)
+            p = f["p"]
+            rows.append(f"{label} & {vals} & {'$<$0.001' if p < 0.001 else format(p, '.3f')} & {f['eta_squared']:.2f} \\\\")
+        names = [c.replace("_", " ") for c in classes]
+        t1 = (f"\\begin{{tabular}}{{l{'c' * len(classes)}cc}}\n\\hline\nFeature & {' & '.join(names)} & Kruskal $p$ & $\\eta^2$ \\\\\n\\hline\n"
+              + "\n".join(rows) + "\n\\hline\n\\end{tabular}\n")
+        crow = []
+        for key, d in metrics["classifiers"].items():
+            p = d["permutation_p"]
+            crow.append(f"{key.replace('_', ' ')} & {d['cv_accuracy']:.3f} & {d['majority_baseline']:.3f} & "
+                        f"{'$<$' + format(1 / (d['permutations'] + 1), '.3f') if p <= 1 / (d['permutations'] + 1) + 1e-9 else format(p, '.3f')} \\\\")
+        t2 = ("\\begin{tabular}{lccc}\n\\hline\nFeatures given to the classifier & CV accuracy & Majority baseline & Permutation $p$ \\\\\n\\hline\n"
+              + "\n".join(crow) + "\n\\hline\n\\end{tabular}\n")
+        return {"dataset audit": t1, "audit classifiers": t2}
+
+    @staticmethod
     def _probe_table(metrics: dict) -> str:
         """Accuracy (95% bootstrap interval) of each model under every masking / background / stain condition."""
         models = metrics.get("models")
@@ -921,9 +1020,10 @@ class ExperimentAgent(BaseAgent):
             return ""
         two = {"baseline", "augmented"} <= set(models)
         first = next(iter(models.values()))["conditions"]
-        order = [c for c in ("original", "cells_masked", "cells_only", "scale_bar_masked") if c in first]
+        order = [c for c in ("original", "cells_masked", "cells_only", "scale_bar_masked", "person_masked", "person_only") if c in first]
         order += sorted((c for c in first if c.startswith("bg_")), key=lambda c: (first[c].get("protocol_set") == "held_out", c))
         order += sorted((c for c in first if c.startswith("stain_")), key=lambda c: (first[c].get("protocol_set") == "held_out", c))
+        order += [c for c in first if c not in order]  # conditions a domain adds (grayscale, blur, ...)
 
         def label(c: str) -> str:
             tag = {"train": " (train)", "held_out": " (held out)"}.get(first[c].get("protocol_set", ""), "")

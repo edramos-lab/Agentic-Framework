@@ -18,6 +18,7 @@ const KEY_NAMES = [
   "HF_TOKEN",
   "KAGGLE_USERNAME",
   "KAGGLE_KEY",
+  "ZENODO_TOKEN",
 ];
 
 export default function KeysManager() {

@@ -113,7 +113,8 @@ class PlottingAgent(BaseAgent):
 
     # figure_type -> the image the experiment's own script rendered, which is used as it is
     ARTIFACT_FIGURES = {"morphology_examples": "probe_examples.png", "dataset_stats": "dataset_stats.png",
-                        "augmentation_examples": "augmentation_examples.png"}
+                        "augmentation_examples": "augmentation_examples.png",
+                        "dataset_audit": "dataset_audit.png"}  # statistics only: no photograph is ever drawn
 
     def _copy_artifact_figure(self, spec: VisualizationPlan, state: PipelineState) -> GeneratedFigure | None:
         """Copy the image an experiment rendered (probe montage, dataset statistics, augmentation examples)."""

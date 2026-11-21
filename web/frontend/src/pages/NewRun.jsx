@@ -56,6 +56,15 @@ export default function NewRun() {
     sections_required: "Introduction, Related Work, Methodology, Experiments, Results, Discussion, Conclusion",
   });
 
+  // The dataset the experiments use; the defaults are the leukemia study (blood smears from Kaggle)
+  const [dataset, setDataset] = useState({
+    domain: "microscopy",
+    source: "kaggle",
+    id: "mehradaria/leukemia",
+    split: "official",
+    group_regex: "",
+  });
+
   const [colab, setColab] = useState({
     enabled: true,
     gpu_type: "T4",
@@ -157,6 +166,13 @@ export default function NewRun() {
             .map((s) => s.trim())
             .filter(Boolean),
           timeout_minutes: experiment.timeout_minutes,
+          dataset: {
+            domain: dataset.domain,
+            source: dataset.source,
+            id: dataset.id.trim(),
+            split: dataset.split,
+            group_regex: dataset.group_regex.trim(),
+          },
           // Training goes to Colab; edge benchmarks go to the Jetson when one is set up
           backend: "colab",
           jetson: {
@@ -194,6 +210,7 @@ export default function NewRun() {
     setter((prev) => ({ ...prev, [field]: e.target.value }));
   const upIdea = up(setIdea);
   const upGuide = up(setGuideline);
+  const upDataset = up(setDataset);
   const upColab = up(setColab);
   const upJetson = up(setJetson);
   const upExp = up(setExperiment);
@@ -352,6 +369,37 @@ export default function NewRun() {
             multiple
             accept=".py,.sh,.r,.json"
             onChange={(e) => setScriptFiles([...e.target.files])}
+          />
+        </div>
+      </Section>
+
+      {/* Dataset */}
+      <Section
+        title="Dataset"
+        description="Which data the experiments use and which recipe runs on them. Kaggle and Zenodo tokens are kept on the API Keys page."
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <Select label="Kind of images" value={dataset.domain} onChange={upDataset("domain")}>
+            <option value="microscopy">Blood-smear microscopy (cells, stains)</option>
+            <option value="photos">Photographs (person, background)</option>
+          </Select>
+          <Select label="Source" value={dataset.source} onChange={upDataset("source")}>
+            <option value="kaggle">Kaggle</option>
+            <option value="zenodo">Zenodo</option>
+          </Select>
+          <Input
+            label={dataset.source === "zenodo" ? "Zenodo record id" : "Kaggle dataset (owner/name)"}
+            value={dataset.id}
+            onChange={upDataset("id")}
+          />
+          <Select label="Train/test split" value={dataset.split} onChange={upDataset("split")}>
+            <option value="official">The dataset's own train/ and test/ folders</option>
+            <option value="random">Random, stratified</option>
+          </Select>
+          <Input
+            label="Capture session in the file name (regex, optional)"
+            value={dataset.group_regex}
+            onChange={upDataset("group_regex")}
           />
         </div>
       </Section>

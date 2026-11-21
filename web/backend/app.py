@@ -30,6 +30,8 @@ from paper_orchestra.utils.overleaf import NoManuscript, build_overleaf_zip
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
+from paper_orchestra.domains import DOMAINS
+
 from .config import settings, vault
 from .runner import _reuse_dir, colab_problem, get_event_queue, get_run, list_runs, start_pipeline
 from .schemas import ApiKeyIn, ApiKeyOut, PipelineRunStatus, PipelineRunSummary, PipelineStartRequest, RunArtifact
@@ -122,6 +124,9 @@ async def list_uploads() -> list[dict]:
 async def pipeline_start(req: PipelineStartRequest) -> dict:
     """Start a new pipeline run. Returns immediately with the run_id."""
     er = req.experiment_requirements
+    if er and (er.dataset.domain not in DOMAINS or er.dataset.source not in ("kaggle", "zenodo", "local")):
+        raise HTTPException(400, f"unknown dataset domain {er.dataset.domain!r} or source {er.dataset.source!r}; "
+                                 f"domains: {', '.join(DOMAINS)}; sources: kaggle, zenodo, local")
     if er and er.reuse_run_id:
         try:
             _reuse_dir(er.reuse_run_id)

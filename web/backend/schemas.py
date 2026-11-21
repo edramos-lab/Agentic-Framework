@@ -75,6 +75,15 @@ class JetsonInput(BaseModel):
     upload_files: list[str] = Field(default_factory=list)
 
 
+class DatasetInput(BaseModel):
+    """The dataset section of the form; the defaults are the leukemia study, so a request without it is unchanged."""
+    domain: str = "microscopy"  # which experiment recipe runs: microscopy | photos
+    source: str = "kaggle"  # kaggle | zenodo | local
+    id: str = "mehradaria/leukemia"  # Kaggle slug or Zenodo record id
+    split: str = "official"  # official | random
+    group_regex: str = ""  # what in a file name is the capture session or subject (default: a date)
+
+
 class ExperimentInput(BaseModel):
     datasets: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=list)
@@ -87,6 +96,7 @@ class ExperimentInput(BaseModel):
     colab: ColabInput = Field(default_factory=ColabInput)
     jetson: JetsonInput = Field(default_factory=JetsonInput)
     reuse_run_id: str = ""  # a finished run whose experiment results are reused (e.g. after the writing step failed)
+    dataset: DatasetInput = Field(default_factory=DatasetInput)
 
 
 class LLMInput(BaseModel):
