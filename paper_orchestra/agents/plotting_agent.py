@@ -10,13 +10,16 @@ executes it to produce PDF/PNG files.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 from ..base_agent import BaseAgent
-from ..models import GeneratedFigure, PipelineState, VisualizationPlan
+from ..models import ExperimentResult, GeneratedFigure, PipelineState, VisualizationPlan
+from ..utils.figures import RENDERERS, NoData
+from ..utils.metrics import compact_metrics
 
 SYSTEM_PROMPT = """\
 You are a scientific visualization expert.  Given a figure specification,
@@ -74,11 +77,64 @@ class PlottingAgent(BaseAgent):
         if not named and "experiment" not in src and "benchmark" not in src:
             return False, ""
         chosen = named or results
-        data = {r.experiment_id: {"target": r.target, "device": r.device, "metrics": r.metrics}
+        data = {r.experiment_id: {"target": r.target, "device": r.device, "metrics": compact_metrics(r.metrics)}
                 for r in chosen if r.status == "success" and r.metrics}
         return True, json.dumps(data, indent=2) if data else ""
 
+    def _measured_source(self, spec: VisualizationPlan, state: PipelineState, usable) -> "ExperimentResult | None":
+        """The successful experiment a measured figure is drawn from: the one the spec names, else the first that fits.
+
+        A spec that names an experiment is drawn from that one only: if it failed, the figure is skipped rather than
+        drawn from another experiment's numbers (the baseline's curves must never come from the augmented model).
+        """
+        all_results = state.experiment_output.results if state.experiment_output else []
+        named_any = [r for r in all_results if r.experiment_id.lower() in spec.data_source.lower()]
+        results = [r for r in all_results if r.status == "success" and r.metrics and usable(r.metrics)]
+        named = [r for r in results if r in named_any]
+        if named_any:
+            return (named or [None])[0]
+        return (results or [None])[0]
+
+    def _render_measured(self, spec: VisualizationPlan, state: PipelineState) -> GeneratedFigure | None:
+        """Confusion matrix, ROC, probe and training-curve figures: drawn by code from the measurements."""
+        render, usable = RENDERERS[spec.figure_type]
+        src = self._measured_source(spec, state, usable)
+        if src is None:
+            self.logger.warning("Figure %s (%s) has no measurements to draw from — skipped.", spec.figure_id, spec.figure_type)
+            return None
+        out_path = self.agent_dir / f"{spec.figure_id}.pdf"
+        try:
+            render(src.metrics, out_path)
+        except NoData as exc:
+            self.logger.warning("Figure %s skipped: %s", spec.figure_id, exc)
+            return None
+        return GeneratedFigure(figure_id=spec.figure_id, file_path=out_path, caption=spec.description,
+                               label=f"fig:{spec.figure_id}")
+
+    # figure_type -> the image the experiment's own script rendered, which is used as it is
+    ARTIFACT_FIGURES = {"morphology_examples": "probe_examples.png", "dataset_stats": "dataset_stats.png",
+                        "augmentation_examples": "augmentation_examples.png"}
+
+    def _copy_artifact_figure(self, spec: VisualizationPlan, state: PipelineState) -> GeneratedFigure | None:
+        """Copy the image an experiment rendered (probe montage, dataset statistics, augmentation examples)."""
+        wanted = self.ARTIFACT_FIGURES[spec.figure_type]
+        results = [r for r in (state.experiment_output.results if state.experiment_output else []) if r.status == "success"]
+        named = [r for r in results if r.experiment_id.lower() in spec.data_source.lower()]
+        for r in named or results:
+            for art in r.artifacts:
+                if art.name == wanted and art.exists():
+                    out_path = self.agent_dir / f"{spec.figure_id}.png"
+                    shutil.copy(art, out_path)
+                    return GeneratedFigure(figure_id=spec.figure_id, file_path=out_path, caption=spec.description,
+                                           label=f"fig:{spec.figure_id}")
+        self.logger.warning("Figure %s skipped: no %s from a successful experiment.", spec.figure_id, wanted)
+        return None
+
     def _generate_figure(self, spec: VisualizationPlan, state: PipelineState) -> GeneratedFigure | None:
+        if spec.figure_type in RENDERERS:
+            return self._render_measured(spec, state)
+        if spec.figure_type in self.ARTIFACT_FIGURES:
+            return self._copy_artifact_figure(spec, state)
         out_path = self.agent_dir / f"{spec.figure_id}.pdf"
         uses_results, results_json = self._experiment_data(spec, state)
         if uses_results and not results_json:

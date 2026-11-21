@@ -40,10 +40,11 @@ class ReviewAgent(BaseAgent):
 
     def review(self, latex_source: str, cycle: int, prev_score: float = 0.0) -> ReviewScore:
         """Score a manuscript and return structured feedback."""
+        # the whole manuscript: a cut-off one is reviewed as an incomplete paper
         user_msg = (
             f"Review cycle: {cycle}\n"
             f"Previous overall score: {prev_score}\n\n"
-            f"# Manuscript\n```latex\n{latex_source[:15000]}\n```"
+            f"# Manuscript\n```latex\n{latex_source[:150000]}\n```"
         )
 
         raw = self._prompt_json(REVIEW_SYSTEM, user_msg, max_tokens=4096)

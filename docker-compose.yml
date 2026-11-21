@@ -7,11 +7,15 @@ services:
       - "8050:8000"
     volumes:
       - po-data:/app/data
+      # `colab` login (run once: docker exec -it <backend> colab status); the token is kept unencrypted in this volume
+      - colab-auth:/root/.config/colab-cli
+      - colab-keyring:/root/.local/share/python_keyring
       # Private key for the Jetson edge target.  Set JETSON_SSH_KEY=$HOME/.ssh/id_ed25519
       # before `docker compose up`; unset, the Jetson target is simply unavailable.
       - ${JETSON_SSH_KEY:-/dev/null}:/run/secrets/jetson_key:ro
     environment:
       - PO_DATA_DIR=/app/data
+      - PYTHON_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring
       # Optional: faster literature search. Leave unset to use the public rate limits.
       - OPENALEX_MAILTO=${OPENALEX_MAILTO:-}
       - S2_API_KEY=${S2_API_KEY:-}
@@ -28,3 +32,5 @@ services:
 
 volumes:
   po-data:
+  colab-auth:
+  colab-keyring:

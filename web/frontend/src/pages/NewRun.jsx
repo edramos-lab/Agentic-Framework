@@ -348,9 +348,9 @@ export default function NewRun() {
           />
           <FileInput
             label="Experiment scripts"
-            hint="Optional. Accepts .py, .sh, .r"
+            hint="Optional. Accepts .py, .sh, .r, and training_history.json (per-epoch train_loss, val_loss, train_acc, val_acc) for training curves"
             multiple
-            accept=".py,.sh,.r"
+            accept=".py,.sh,.r,.json"
             onChange={(e) => setScriptFiles([...e.target.files])}
           />
         </div>

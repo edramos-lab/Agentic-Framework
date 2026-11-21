@@ -26,16 +26,19 @@ You are a Content Refinement agent for academic papers.  Given:
 1. A LaTeX manuscript
 2. Reviewer feedback with specific suggestions
 
-Revise the manuscript to address ALL suggestions.  Improve clarity,
-strengthen arguments, fix any issues.  Keep the overall structure intact.
+Propose targeted edits that address the suggestions: improve clarity, make the paper consistent with itself (for
+example the same numbering of the research questions in the introduction and the conclusion), strengthen weak
+arguments, fix errors.
 
+Return ONLY JSON: {"edits": [{"old": "...", "new": "..."}, ...]} with at most 12 edits.
+- "old" is text copied EXACTLY from the manuscript and occurs in it exactly once; keep it short (a sentence or a
+  paragraph), but long enough to be unique.
+- "new" replaces it.
 Rules:
-- Keep every number, table and equation exactly as given.
-- Do not add citations; keep only the \\cite keys already in the manuscript.
-- Do not claim results, training or experiments the manuscript does not already report.
-
-Return the COMPLETE revised LaTeX source — not a diff, the full document, from
-\\documentclass through \\end{document}, with no markdown fences.
+- Never edit a table, a figure, an equation, a caption or a \\cite key; keep every number exactly as given.
+- Do not add citations, and do not introduce any number, result, training run or experiment the manuscript does not
+  already report.
+- Do not suggest adding material that is already in the manuscript: the reviewer may have been shown only part of it.
 """
 
 
@@ -63,7 +66,12 @@ class RefinementAgent(BaseAgent):
             self.step(f"cycle{cycle}", f"Cycle {cycle}/{self.max_cycles}: review", "running")
 
             # Review the current version
-            score = self.review_agent.review(current_latex, cycle, prev_score)
+            try:
+                score = self.review_agent.review(current_latex, cycle, prev_score)
+            except Exception as exc:  # the manuscript is already written; keep it rather than lose the run
+                self.logger.error("  Review failed (%s); keeping the current manuscript.", str(exc)[:200])
+                stopped_reason = "error"
+                break
             self.step(f"cycle{cycle}", f"Cycle {cycle}/{self.max_cycles}: review", "success",
                       detail=f"score {score.overall_score:.1f}/10 · {score.verdict.value}")
             review_history.append(score)
@@ -91,7 +99,12 @@ class RefinementAgent(BaseAgent):
 
             # Refine based on feedback
             if cycle < self.max_cycles:  # Don't refine after last review
-                current_latex = self._refine(current_latex, score, self._valid_keys(state))
+                try:
+                    current_latex = self._refine(current_latex, score, self._valid_keys(state))
+                except Exception as exc:
+                    self.logger.error("  Refinement failed (%s); keeping the previous version.", str(exc)[:200])
+                    stopped_reason = "error"
+                    break
                 self._write(f"manuscript_v{cycle + 1}.tex", current_latex)
 
             prev_score = score.overall_score
@@ -115,8 +128,18 @@ class RefinementAgent(BaseAgent):
     def _valid_keys(state: PipelineState) -> set[str]:
         return {e.cite_key for e in state.literature.bib_entries} if state.literature else set()
 
+    PROTECTED = ("\\begin{table", "\\begin{tabular", "\\begin{figure", "\\includegraphics", "\\begin{equation",
+                 "\\begin{align", "\\caption", "\\label")
+
     def _refine(self, latex: str, score: ReviewScore, valid_keys: set[str]) -> str:
-        """Apply one round of refinement based on review feedback."""
+        """Apply one round of reviewer-driven edits.
+
+        The model returns edits, not the whole paper: a full rewrite does not fit its output limit, and an edit can
+        be checked.  An edit is applied only if its text occurs exactly once, it leaves tables, figures, equations,
+        captions and labels alone, and it introduces no number the manuscript does not already contain.
+        """
+        import re
+
         user_msg = (
             f"# Current Manuscript\n```latex\n{latex}\n```\n\n"
             f"# Reviewer Feedback (score: {score.overall_score}/10)\n"
@@ -124,17 +147,29 @@ class RefinementAgent(BaseAgent):
             f"# Specific Suggestions\n"
             + "\n".join(f"- {s}" for s in score.suggestions)
         )
-        revised = strip_fences(self._prompt(REFINE_SYSTEM, user_msg, max_tokens=16000))
-        if "\\end{document}" not in revised:
-            self.logger.warning("Refined manuscript is incomplete (no \\end{document}); keeping the previous version.")
-            return latex
-        revised, removed = restrict_citations(revised, valid_keys)
+        raw = self._prompt_json(REFINE_SYSTEM, user_msg, max_tokens=8000)
+        numbers = lambda t: set(re.findall(r"\d+(?:[.,]\d+)?", t))
+        known = numbers(latex)
+        applied = 0
+        for e in (raw.get("edits") or [])[:12]:
+            old, new = e.get("old", ""), e.get("new", "")
+            why = ("old text not found exactly once" if not old or latex.count(old) != 1
+                   else "touches a table, figure, equation, caption or label" if any(m in old or m in new for m in self.PROTECTED)
+                   else "introduces new numbers: " + ", ".join(sorted(numbers(new) - known)) if numbers(new) - known
+                   else "")
+            if why:
+                self.logger.warning("  Edit skipped (%s): %s", why, old[:70].replace("\n", " "))
+                continue
+            latex = latex.replace(old, new, 1)
+            applied += 1
+        self.logger.info("  Applied %d of %d proposed edits", applied, len(raw.get("edits") or []))
+        latex, removed = restrict_citations(latex, valid_keys)
         if removed:
             self.logger.warning("Removed citations to unknown keys: %s", ", ".join(sorted(set(removed))))
-        revised, dupes = dedupe_floats(revised)
+        latex, dupes = dedupe_floats(latex)
         if dupes:
             self.logger.warning("Removed %d duplicated figure/table environment(s)", dupes)
-        return disable_unused_bibliography(revised)
+        return disable_unused_bibliography(latex)
 
     # ----- PDF compilation ---------------------------------------------------
 

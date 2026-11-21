@@ -16,6 +16,8 @@ const KEY_NAMES = [
   "SEMANTIC_SCHOLAR_API_KEY",
   "WANDB_API_KEY",
   "HF_TOKEN",
+  "KAGGLE_USERNAME",
+  "KAGGLE_KEY",
 ];
 
 export default function KeysManager() {

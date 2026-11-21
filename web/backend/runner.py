@@ -7,6 +7,8 @@ updates through an asyncio queue that the WebSocket endpoint consumes.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import json
 import logging
 import os
@@ -178,10 +180,11 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
                 metrics=er.metrics,
                 baselines=er.baselines,
                 hardware=er.hardware,
-                scripts_dir=er.scripts_dir,
+                scripts_dir=er.scripts_dir or str(settings.uploads_dir),  # uploaded scripts and training_history.json
                 timeout_minutes=er.timeout_minutes,
                 backend=er.backend,
-                jetson=JetsonConfig(**er.jetson.model_dump()),
+                reuse_run_dir=_reuse_dir(er.reuse_run_id),
+                jetson=_jetson_config(er),
                 colab=ColabConfig(
                     enabled=er.colab.enabled,
                     gpu_type=er.colab.gpu_type,
@@ -263,6 +266,42 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def colab_problem() -> str:
+    """Why Colab training cannot start, or '' when the colab CLI is installed and signed in."""
+    if shutil.which("colab") is None:
+        return "the colab CLI is not installed in the backend"
+    try:
+        proc = subprocess.run(["colab", "status"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "the colab CLI did not answer"
+    if "authorization code" in proc.stdout + proc.stderr:
+        return "the colab CLI is not signed in. Run: docker exec -it agenticframework-backend-1 colab status"
+    return ""
+
+
+def _reuse_dir(run_id: str) -> str:
+    """The folder of an earlier run whose experiment results this run reuses ('' for none)."""
+    if not run_id:
+        return ""
+    import re
+
+    path = settings.runs_dir / run_id
+    if not re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", run_id) or not (path / "experimentagent").is_dir():
+        raise ValueError(f"run {run_id!r} has no experiment results to reuse")
+    return str(path)
+
+
+def _jetson_config(er) -> JetsonConfig:
+    """The Jetson settings; when Colab trains the model, the Jetson must not use a pre-trained one."""
+    from paper_orchestra.models import JetsonConfig
+
+    cfg = JetsonConfig(**er.jetson.model_dump())
+    if er.colab.enabled:  # Colab trains the model and the data come from Kaggle through it, not from the Jetson's copy
+        for name in ("BENCH_MODEL_DIR", "BENCH_TEST_DIR", "BENCH_CALIB_DIR"):
+            cfg.env_vars.pop(name, None)
+    return cfg
+
 
 def start_pipeline(req: PipelineStartRequest, loop: asyncio.AbstractEventLoop) -> str:
     """Start a pipeline run and return the run_id."""

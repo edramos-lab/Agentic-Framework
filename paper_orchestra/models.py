@@ -75,6 +75,7 @@ class ExperimentRequirements(BaseModel):
     backend: str = "colab"  # default target for plans that do not set one: colab | jetson
     colab: ColabConfig = Field(default_factory=ColabConfig)
     jetson: JetsonConfig = Field(default_factory=JetsonConfig)
+    reuse_run_dir: str = ""  # folder of a finished run: experiments whose outputs it holds are not run again
 
 
 class PipelineInputs(BaseModel):

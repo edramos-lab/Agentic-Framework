@@ -7,3 +7,4 @@ pydantic>=2.5.0
 pydantic-settings>=2.3.0
 aiofiles>=24.1.0
 PyYAML>=6.0
+keyrings.alt>=5.0  # lets the colab CLI keep its login token in a file

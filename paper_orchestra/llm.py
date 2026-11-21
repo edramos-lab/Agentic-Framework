@@ -48,12 +48,12 @@ class LLMClient:
         if self.provider == "anthropic":
             from anthropic import Anthropic
 
-            self._anthropic = Anthropic(api_key=api_key)
+            self._anthropic = Anthropic(api_key=api_key, max_retries=5)
             self._openai = None
         else:
             from openai import OpenAI
 
-            kwargs: dict[str, Any] = {"api_key": api_key}
+            kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 5}  # long generations get dropped now and then
             if base_url:
                 kwargs["base_url"] = base_url
             self._openai = OpenAI(**kwargs)
@@ -98,7 +98,13 @@ class LLMClient:
             text = "\n".join(lines[1:])
             if text.endswith("```"):
                 text = text[:-3]
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:  # a model without a JSON mode may wrap the object in a sentence
+            start, end = text.find("{"), text.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            return json.loads(text[start:end + 1])
 
     # ----- private -----------------------------------------------------------
 
@@ -135,14 +141,33 @@ class LLMClient:
             else:
                 chat_messages.append(m)
 
+        # The model may think before it answers, and the thinking counts against max_tokens: a reply capped at a few
+        # thousand tokens can be cut off mid-sentence.  Give it room, and if it still stops at the limit, make it continue.
+        max_tokens = max(max_tokens, 12000)
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": chat_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens,  # no temperature: the SDK in use does not accept it
         }
         if system.strip():
             kwargs["system"] = system.strip()
 
+        def text_of(r) -> str:
+            # the reply may open with a thinking block; only the text blocks are the answer
+            return "".join(b.text for b in r.content if getattr(b, "type", "text") == "text")
+
         resp = self._anthropic.messages.create(**kwargs)
-        return resp.content[0].text
+        text = text_of(resp)
+        for _ in range(4):
+            if getattr(resp, "stop_reason", "") != "max_tokens":
+                break
+            if not text.strip():  # all of the budget went on thinking: ask again with more room
+                kwargs["max_tokens"] = min(kwargs["max_tokens"] * 2, 20000)
+            else:
+                kwargs["messages"] = [*kwargs["messages"], {"role": "assistant", "content": text.rstrip()},
+                                      {"role": "user", "content": "Your reply was cut off by the length limit. Continue "
+                                       "exactly where it stopped: no repetition, no preamble, no commentary."}]
+            logging.getLogger("paper_orchestra.llm").warning("Reply hit the token limit; continuing")
+            resp = self._anthropic.messages.create(**kwargs)
+            text = text + text_of(resp) if text.strip() else text_of(resp)
+        return text

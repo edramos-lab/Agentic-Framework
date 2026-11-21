@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 
 from ..base_agent import BaseAgent
-from ..utils.latex import dedupe_floats, drop_missing_figures, disable_unused_bibliography, restrict_citations, strip_fences
+from ..utils.metrics import compact_metrics
+from ..utils.latex import fix_undefined_refs, close_cut_off, looks_cut_off, dedupe_floats, drop_missing_figures, disable_unused_bibliography, restrict_citations, strip_fences
 from ..models import (
     GeneratedFigure,
     ManuscriptDraft,
@@ -38,9 +39,26 @@ Experiment reporting:
   warm-up, latency as mean +/- std, and the serving stack (Triton, TensorRT).
 - Tables given under "LaTeX table" are generated from the raw results.  Paste
   them unchanged inside a table environment; never retype or round the numbers.
-- If INT8 was built without a calibration cache, say the INT8 numbers show
+- If the results hold "int8_calibration", the INT8 engine was calibrated with TensorRT's entropy
+  calibrator on that many training images (never test images); say so and report its accuracy like
+  the other variants.  When "fp16_fallback" is true the engine is mixed INT8/FP16, so call it that and
+  do not describe it as pure INT8.  If INT8 was built without a calibration cache, say the INT8 numbers show
   speed only and that accuracy was not validated.
 - Do not name a winner when the gap is inside one standard deviation.
+
+Background and morphology (the question of whether the model reads the cells or the stain):
+- "dataset_stats" holds the statistics of the training backgrounds before any training: per-class
+  background colour, Kruskal-Wallis tests, and a linear classifier given only the background or only
+  the cells (cross-validated, with a permutation test).  Say what it measured and give its numbers;
+  never claim more than the tests support.
+- "morphology_probe" holds two models, "baseline" (no augmentation) and "augmented" (training images
+  re-rendered on four stain protocols), both probed on the same test images.  Only the protocols listed
+  under "held_out" were never used in training; the verdict about robustness rests on those, not on the
+  four "train" protocols.  Quote each model's "verdict" and the "comparison" verdict, the confidence
+  intervals and the McNemar p-values; do not describe a difference as real when its interval or p-value
+  does not support it.
+- The stain protocols are synthetic approximations of Romanowsky stains, not real stained slides; say so.
+- The augmented model is the one deployed to the Jetson; the baseline was not benchmarked there.
 """
 
 # Voice rules follow the thesis-voice-coach skill: write like the author, not like a
@@ -101,6 +119,12 @@ class WritingAgent(BaseAgent):
         full_latex, dupes = dedupe_floats(full_latex)
         if dupes:
             self.logger.warning("Removed %d duplicated figure/table environment(s)", dupes)
+        full_latex, remapped, unresolved = fix_undefined_refs(full_latex)
+        if remapped:
+            self.logger.warning("Pointed %d reference(s) at the label that exists: %s", len(remapped),
+                                ", ".join(f"{a} -> {b}" for a, b in remapped.items()))
+        if unresolved:
+            self.logger.warning("References to labels that do not exist: %s", ", ".join(unresolved))
 
         out_path = self._write("manuscript.tex", full_latex)
 
@@ -174,10 +198,10 @@ class WritingAgent(BaseAgent):
                 )
 
         # Add experiment results for methods/experiments/results sections
-        if state.experiment_output and kinds & {"experiments", "discussion"}:
+        if state.experiment_output and kinds & {"experiments", "discussion", "abstract"}:  # the abstract quotes the headline numbers
             exp_summary = []
             for r in state.experiment_output.results:
-                metrics_str = json.dumps(r.metrics, indent=2) if r.metrics else "N/A"
+                metrics_str = json.dumps(compact_metrics(r.metrics), indent=2) if r.metrics else "N/A"
                 exp_summary.append(
                     f"- {r.experiment_id}: status={r.status}, target={r.target}, "
                     f"device={r.device}, duration={r.duration_seconds:.1f}s, metrics={metrics_str}"
@@ -190,7 +214,23 @@ class WritingAgent(BaseAgent):
                     context_parts.append(f"# LaTeX table for {exp_id} (use verbatim)\n{tex}")
 
         user_msg = "\n\n".join(context_parts)
-        return strip_fences(self._prompt(self._system_prompt, user_msg, max_tokens=4096))
+        tex = strip_fences(self._prompt(self._system_prompt, user_msg, max_tokens=4096))
+        for attempt in (1, 2):  # a section cut off by the output limit has an open table or a dangling \\ref
+            problems = looks_cut_off(tex)
+            if not problems:
+                return tex
+            self.logger.warning("  Section '%s' looks cut off (%s); writing it again (attempt %d/2)",
+                                plan.title, "; ".join(problems), attempt)
+            tex = strip_fences(self._prompt(
+                self._system_prompt,
+                user_msg + "\n\n# Important\nA previous attempt at this section ended in the middle of a LaTeX environment or "
+                "command (" + "; ".join(problems) + "). Write the COMPLETE section again, a little more concisely, and close "
+                "every \\begin with its \\end.", max_tokens=8000))
+        problems = looks_cut_off(tex)
+        if problems:
+            self.logger.error("  Section '%s' is still cut off (%s); closing it by hand.", plan.title, "; ".join(problems))
+            tex = close_cut_off(tex)
+        return tex
 
     @staticmethod
     def _section_kinds(plan: WritingPlanSection) -> set[str]:
@@ -201,6 +241,7 @@ class WritingAgent(BaseAgent):
             "related": ("related", "background", "literature"),
             "experiments": ("experiment", "result", "evaluation", "method", "benchmark", "deployment"),
             "discussion": ("discussion", "conclusion", "limitation"),
+            "abstract": ("abstract",),
         }
         return {kind for kind, words in keywords.items() if any(w in text for w in words)}
 

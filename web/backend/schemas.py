@@ -62,9 +62,15 @@ class JetsonInput(BaseModel):
     ssh_key: str = "~/.ssh/id_ed25519"
     remote_dir: str = "/home/jetson/paper_orchestra"
     python: str = "python3"
-    # Models already on the Jetson, read by examples/experiments/triton_benchmark.py
+    # Models and the held-out test images already on the Jetson, read by examples/experiments/triton_benchmark.py
+    # and prepare_dataset.py (which packs the test images for the Colab morphology_probe.py); BENCH_CALIB_DIR holds
+    # the training images the INT8 engine is calibrated on
     env_vars: dict[str, str] = Field(
-        default_factory=lambda: {"BENCH_MODEL_DIR": "/home/admin_ot/paper_orchestra/effvit_b0"}
+        default_factory=lambda: {
+            "BENCH_MODEL_DIR": "/home/admin_ot/paper_orchestra/effvit_b0",
+            "BENCH_TEST_DIR": "/home/admin_ot/fl-platform/data/shards/ALL/test",
+            "BENCH_CALIB_DIR": "/home/admin_ot/fl-platform/data/shards/ALL/shard_1",
+        }
     )
     upload_files: list[str] = Field(default_factory=list)
 
@@ -80,6 +86,7 @@ class ExperimentInput(BaseModel):
     backend: str = "colab"  # default target for plans that do not name one: colab | jetson
     colab: ColabInput = Field(default_factory=ColabInput)
     jetson: JetsonInput = Field(default_factory=JetsonInput)
+    reuse_run_id: str = ""  # a finished run whose experiment results are reused (e.g. after the writing step failed)
 
 
 class LLMInput(BaseModel):

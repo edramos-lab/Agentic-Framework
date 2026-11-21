@@ -14,6 +14,9 @@ from .latex import (
     escape_bibtex,
     restrict_citations,
     strip_fences,
+    fix_bibtex_authors,
+    drop_unreadable_entries,
+    fix_undefined_refs,
 )
 
 _BIB_KEY = re.compile(r"^@\w+\{([^,\s]+),", re.M)
@@ -39,7 +42,9 @@ def build_overleaf_zip(out_dir: Path) -> bytes:
 
     bib_path = _first(out_dir, "literatureagent/references.bib", "writingagent/references.bib")
     bib = bib_path.read_text(encoding="utf-8") if bib_path else ""
+    bib = fix_bibtex_authors(bib)  # "A, B, C" -> "A and B and C": BibTeX stops on a name with too many commas
     bib = _BIB_TEXT.sub(lambda m: m.group(1) + escape_bibtex(m.group(2)) + m.group(3), bib)
+    bib = drop_unreadable_entries(bib)  # a title in a script pdflatex cannot print
 
     # Figures the plotting agent produced, by file stem
     figures = {p.stem: p for p in sorted((out_dir / "plottingagent").glob("*"))
@@ -58,6 +63,7 @@ def build_overleaf_zip(out_dir: Path) -> bytes:
     tex, _ = restrict_citations(tex, set(_BIB_KEY.findall(bib)))
     tex, _ = drop_missing_figures(tex, {Path(n).stem for n in used})
     tex, _ = dedupe_floats(tex)
+    tex, _, _ = fix_undefined_refs(tex)
     if "\\end{document}" not in tex:
         tex += "\n\\bibliographystyle{IEEEtran}\n\\bibliography{references}\n\n\\end{document}\n"
     tex = disable_unused_bibliography(tex)

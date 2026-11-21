@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 
 from ..base_agent import BaseAgent
-from ..utils.latex import escape_bibtex
+from ..utils.latex import escape_bibtex, split_author_list
 from ..models import BibEntry, LiteratureReviewOutput, PipelineState, ResearchNode
 
 logger = logging.getLogger(__name__)
@@ -232,7 +232,7 @@ class LiteratureAgent(BaseAgent):
     @staticmethod
     def _paper_to_bib(paper: dict) -> BibEntry:
         """Convert an S2 paper dict to our BibEntry model + BibTeX string."""
-        authors = [a.get("name", "") for a in paper.get("authors", [])]
+        authors = [n for a in paper.get("authors", []) for n in split_author_list(a.get("name", ""))]
         year = paper.get("year")
         title = paper.get("title", "Untitled")
         venue = paper.get("venue", "") or ""

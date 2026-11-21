@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
 from .config import settings, vault
-from .runner import get_event_queue, get_run, list_runs, start_pipeline
+from .runner import _reuse_dir, colab_problem, get_event_queue, get_run, list_runs, start_pipeline
 from .schemas import ApiKeyIn, ApiKeyOut, PipelineRunStatus, PipelineRunSummary, PipelineStartRequest, RunArtifact
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -121,6 +121,16 @@ async def list_uploads() -> list[dict]:
 @app.post("/api/pipeline/start", status_code=202)
 async def pipeline_start(req: PipelineStartRequest) -> dict:
     """Start a new pipeline run. Returns immediately with the run_id."""
+    er = req.experiment_requirements
+    if er and er.reuse_run_id:
+        try:
+            _reuse_dir(er.reuse_run_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    if er and er.colab.enabled:  # fail now rather than after the outline step
+        problem = await asyncio.to_thread(colab_problem)
+        if problem:
+            raise HTTPException(409, f"Colab training is enabled but {problem}. Fix that, or untick Google Colab.")
     run_id = start_pipeline(req, asyncio.get_running_loop())
     return {"run_id": run_id, "status": "queued"}
 
