@@ -96,11 +96,12 @@ class ExperimentInput(BaseModel):
     colab: ColabInput = Field(default_factory=ColabInput)
     jetson: JetsonInput = Field(default_factory=JetsonInput)
     reuse_run_id: str = ""  # a finished run whose experiment results are reused (e.g. after the writing step failed)
+    reuse_rerun: list[str] = Field(default_factory=list)  # scripts to run again anyway (e.g. one that changed)
     dataset: DatasetInput = Field(default_factory=DatasetInput)
 
 
 class LLMInput(BaseModel):
-    provider: str = "openai"      # "openai" | "anthropic"
+    provider: str = "openai"      # "openai" | "anthropic" | "openrouter"
     model: str = "gpt-4o"
     temperature: float = 0.3
     max_tokens: int = 4096

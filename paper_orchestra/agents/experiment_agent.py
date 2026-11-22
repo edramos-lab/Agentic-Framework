@@ -63,7 +63,7 @@ class ExperimentAgent(BaseAgent):
         default_target = exp_reqs.backend if exp_reqs else "colab"
 
         ordered = self._topological_sort(state.outline.experiment_plan)
-        reused = self._reuse_results(ordered, Path(exp_reqs.reuse_run_dir), colab_cfg, default_target) \
+        reused = self._reuse_results(ordered, Path(exp_reqs.reuse_run_dir), colab_cfg, default_target, set(exp_reqs.reuse_rerun)) \
             if exp_reqs and exp_reqs.reuse_run_dir else {}
         targets = {p.experiment_id: (p.target or default_target) for p in ordered if p.experiment_id not in reused}
         host = os.environ.get("JETSON_HOST") or jetson_cfg.host
@@ -152,7 +152,7 @@ class ExperimentAgent(BaseAgent):
         return state
 
     def _reuse_results(self, plans: list[ExperimentPlan], prev: Path, colab_cfg: ColabConfig,
-                       default_target: str) -> dict[str, ExperimentResult]:
+                       default_target: str, rerun: set[str] = frozenset()) -> dict[str, ExperimentResult]:
         """Results of experiments an earlier run already finished: same script, every expected output present.
 
         The earlier run's outputs are copied into this run, so the figures, tables and the paper draw on them exactly
@@ -166,6 +166,8 @@ class ExperimentAgent(BaseAgent):
         by_script = {p["script"]: p["experiment_id"] for p in previous if p.get("script")}
         out: dict[str, ExperimentResult] = {}
         for plan in plans:
+            if plan.script in rerun:
+                continue  # the caller asked for this one to run again
             folder = prev / "experimentagent" / by_script.get(plan.script, "-")
             wanted = plan.expected_outputs
             if not wanted or not all((folder / name).is_file() for name in wanted):
@@ -937,7 +939,7 @@ class ExperimentAgent(BaseAgent):
             for key, tex in (self._stats_tables(r.metrics) if r.status == "success" else {}).items():
                 self._write(f"{r.experiment_id}_{key.replace(' ', '_')}_table.tex", tex)
                 tables[f"{r.experiment_id} {key}"] = tex
-            more = {**self._cv_tables(r.metrics), **self._audit_tables(r.metrics)} if r.status == "success" else {}
+            more = {**self._cv_tables(r.metrics), **self._audit_tables(r.metrics), **self._pose_tables(r.metrics), **self._benchmark_tables(r.metrics), **self._masked_tables(r.metrics)} if r.status == "success" else {}
             for key, tex in more.items():
                 self._write(f"{r.experiment_id}_{key.replace(' ', '_')}_table.tex", tex)
                 tables[f"{r.experiment_id} {key}"] = tex
@@ -1011,6 +1013,93 @@ class ExperimentAgent(BaseAgent):
         t2 = ("\\begin{tabular}{lccc}\n\\hline\nFeatures given to the classifier & CV accuracy & Majority baseline & Permutation $p$ \\\\\n\\hline\n"
               + "\n".join(crow) + "\n\\hline\n\\end{tabular}\n")
         return {"dataset audit": t1, "audit classifiers": t2}
+
+    @staticmethod
+    def _benchmark_tables(metrics: dict) -> dict[str, str]:
+        """Pose-detector benchmark: speed and availability, agreement between detectors, geometry classifier per detector."""
+        dets = metrics.get("detectors")
+        if not dets or "agreement" not in metrics:
+            return {}
+        classes = metrics["classes"]
+        label = {k: v["label"] for k, v in dets.items()}
+        pct = lambda v: f"{100 * v:.0f}\\%"
+        rows = []
+        for k, d in dets.items():
+            dev = "CPU" if d["device"].startswith("cpu") else "GPU"
+            ov, lat = d["availability_overall"], d["latency_ms"]
+            p = d["availability_test"]["p"]
+            rows.append(f"{d['label']} & {d['person_finder']} & {dev} & {lat['median']:.0f} / {lat['p90']:.0f} & {pct(ov['both_hips'])} & {pct(ov['both_knees'])} & {pct(ov['both_ankles'])} & "
+                        f"{d['knees_and_ankles_found']} & {'$<$0.001' if p < 0.001 else format(p, '.3f')} \\\\")
+        t1 = ("\\begin{tabular}{llcccccc c}\n\\hline\nDetector & Person finder & Run on & ms median / p90 & Hips & Knees & Ankles & Knees+ankles (images) & Class $p$ \\\\\n\\hline\n"
+              + "\n".join(rows) + "\n\\hline\n\\end{tabular}\n").replace("{llcccccc c}", "{llccccccc}")
+        arows = []
+        for pair, a in metrics["agreement"].items():
+            x, z = pair.split("|")
+            f = lambda v: "n/a" if v is None else (f"{v:.1f}" if isinstance(v, float) and abs(v) > 1.5 else f"{v:.2f}")
+            arows.append(f"{label[x]} vs {label[z]} & {f(a['hip_px'])} & {f(a['knee_px'])} & {f(a['ankle_px'])} & {f(a['spearman_knee_over_ankle_gap'])} & {f(a['spearman_tibia_inward_tilt'])} & {a['images_both_complete']} \\\\")
+        t2 = ("\\begin{tabular}{lcccccc}\n\\hline\nPair & Hip (px) & Knee (px) & Ankle (px) & $\\rho$ knee/ankle gap & $\\rho$ tibial tilt & Images \\\\\n\\hline\n"
+              + "\n".join(arows) + "\n\\hline\n\\end{tabular}\n")
+        grows = []
+        for k, d in dets.items():
+            g = d.get("geometry_classifier")
+            if not g:
+                grows.append(f"{d['label']} & n/a & n/a & n/a & n/a \\\\")
+                continue
+            pp = g["permutation_p"]
+            per = "/".join(str(g["n_per_class"].get(c, "")) for c in classes)
+            grows.append(f"{d['label']} & {g['n']} ({per}) & {g['cv_accuracy']:.3f} & {g['majority_baseline']:.3f} & "
+                         f"{'$<$' + format(1 / (g['permutations'] + 1), '.3f') if pp <= 1 / (g['permutations'] + 1) + 1e-9 else format(pp, '.3f')} \\\\")
+        t3 = ("\\begin{tabular}{lcccc}\n\\hline\nDetector & Images (per class) & CV accuracy & Majority baseline & Permutation $p$ \\\\\n\\hline\n"
+              + "\n".join(grows) + "\n\\hline\n\\end{tabular}\n")
+        return {"keypoint detector speed and availability": t1, "keypoint detector agreement": t2, "keypoint detector geometry classifiers": t3}
+
+    @staticmethod
+    def _masked_tables(metrics: dict) -> dict[str, str]:
+        """Segmentation networks trained and tested on photographs with the person masked out, against the shuffled-label reference."""
+        if "mask_grow_px" not in metrics or "models" not in metrics:
+            return {}
+        names = {"original": "Original", "person_masked": "Person masked (silhouette stays)", "scene_only": "Person inpainted (room only)", "silhouette_only": "Silhouette only"}
+        rows = []
+        for m, forms in metrics["models"].items():
+            for f, v in forms.items():
+                rows.append(f"{m.replace('_', ' ')} & {names.get(f, f)} & {v['accuracy']:.3f} [{v['ci95'][0]:.3f}, {v['ci95'][1]:.3f}] & {v['balanced_accuracy']:.3f} & "
+                            f"{v['shuffled_label_accuracy']:.3f} & {v['verdict']} \\\\")
+        t = (f"\\begin{{tabular}}{{llcccl}}\n\\hline\nModel & Input & Accuracy [95\\% CI] & Balanced acc. & Shuffled labels & Verdict (majority {metrics['majority_baseline']:.3f}) \\\\\n\\hline\n"
+             + "\n".join(rows) + "\n\\hline\n\\end{tabular}\n")
+        return {"segmentation models on masked photographs": t}
+
+    @staticmethod
+    def _pose_tables(metrics: dict) -> dict[str, str]:
+        """Keypoint detection rates per class, the leg geometry per class, and the classifiers given detectability or geometry."""
+        if "availability" not in metrics or "classifiers" not in metrics or "detector" not in metrics:
+            return {}
+        classes, av = metrics["classes"], metrics["availability"]
+        names = [c.replace("_", " ") for c in classes]
+        label = {"person_detected": "Person found", "both_knees": "Both knees found", "both_ankles": "Both ankles found", "both_hips": "Both hips found"}
+        rows = [f"{label[k]} & " + " & ".join(f"{100 * av[c][k]:.0f}\\%" for c in classes) + " \\\\" for k in label]
+        t1 = (f"\\begin{{tabular}}{{l{'c' * len(classes)}}}\n\\hline\nKeypoints & {' & '.join(names)} \\\\\n\\hline\n" + "\n".join(rows) + "\n\\hline\n\\end{tabular}\n")
+        feats = [("knee_over_ankle_gap", "Knee gap / ankle gap"), ("tibia_inward_tilt", "Tibia inward tilt ($^\\circ$)"), ("tilt_asymmetry", "Tilt asymmetry ($^\\circ$)"),
+                 ("knee_angle_mean", "Hip-knee-ankle angle ($^\\circ$)")]
+        grow = []
+        for key, lab in feats:
+            if key not in metrics.get("features", {}):
+                continue
+            f, cells = metrics["features"][key], []
+            for c in classes:
+                d = metrics["per_class"][c][key]
+                cells.append("n/a" if d["mean"] is None else f"{d['mean']:.2f} $\\pm$ {d['std']:.2f} ({d['n']})")
+            grow.append(f"{lab} & " + " & ".join(cells) + f" & {'$<$0.001' if f['p'] < 0.001 else format(f['p'], '.3f')} & {f['eta_squared']:.2f} \\\\")
+        t2 = (f"\\begin{{tabular}}{{l{'c' * len(classes)}cc}}\n\\hline\nFeature (images) & {' & '.join(names)} & Kruskal $p$ & $\\eta^2$ \\\\\n\\hline\n"
+              + "\n".join(grow) + "\n\\hline\n\\end{tabular}\n")
+        crow = []
+        for key, d in metrics["classifiers"].items():
+            p = d["permutation_p"]
+            per = "/".join(str(d.get("n_per_class", {}).get(c, "")) for c in classes) if d.get("n_per_class") else ""
+            crow.append(f"{key.replace('_', ' ')} & {d['n']} ({per}) & {d['cv_accuracy']:.3f} & {d['majority_baseline']:.3f} & "
+                        f"{'$<$' + format(1 / (d['permutations'] + 1), '.3f') if p <= 1 / (d['permutations'] + 1) + 1e-9 else format(p, '.3f')} \\\\")
+        t3 = ("\\begin{tabular}{lcccc}\n\\hline\nFeatures given to the classifier & Images (per class) & CV accuracy & Majority baseline & Permutation $p$ \\\\\n\\hline\n"
+              + "\n".join(crow) + "\n\\hline\n\\end{tabular}\n")
+        return {"keypoint detection": t1, "leg geometry": t2, "pose classifiers": t3}
 
     @staticmethod
     def _probe_table(metrics: dict) -> str:

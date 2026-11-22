@@ -195,6 +195,18 @@ def _by_caption(latex: str, label: str, kind: str, defined: set[str]) -> str | N
     return scored[0][1] if scored[0][0] > 0 and (len(scored) == 1 or scored[1][0] < scored[0][0]) else None
 
 
+def _label_heading(latex: str, label: str) -> str | None:
+    """Add \\label{label} after the one \\section/\\subsection whose title shares word stems with it (sec:methods -> Methodology)."""
+    stems = lambda text: {w[:4] for w in re.findall(r"[a-z]{4,}", text.lower())}
+    want = stems(label.split(":", 1)[-1].replace("_", " "))
+    heads = [(len(want & stems(m.group(2))), m) for m in re.finditer(r"\\(section|subsection)\*?\{([^}]*)\}", latex)]
+    heads = sorted(((n, m) for n, m in heads if n > 0), key=lambda x: -x[0])
+    if not heads or (len(heads) > 1 and heads[1][0] == heads[0][0]):
+        return None
+    m = heads[0][1]
+    return latex[:m.end()] + f"\\label{{{label}}}" + latex[m.end():]
+
+
 def fix_undefined_refs(latex: str) -> tuple[str, dict[str, str], list[str]]:
     """Point a \\ref to a label that does not exist at the defined label of the same kind (tab:, fig:, sec:) that shares
     the most words with it (tab:probe_results -> tab:probe), when exactly one does.  Returns the new source, the labels it
@@ -215,7 +227,12 @@ def fix_undefined_refs(latex: str) -> tuple[str, dict[str, str], list[str]]:
         if guess:
             remap[label] = guess
         else:
-            unresolved.append(label)
+            labelled = _label_heading(latex, label) if kind == "sec:" else None
+            if labelled is None:
+                unresolved.append(label)
+            else:
+                latex = labelled  # the heading now carries the label
+                defined.add(label)
     if remap:
         latex = _REF.sub(lambda m: f"\\{m.group(1)}{{{remap.get(m.group(2), m.group(2))}}}", latex)
     return latex, remap, unresolved

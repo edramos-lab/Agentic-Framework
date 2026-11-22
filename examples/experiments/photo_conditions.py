@@ -78,7 +78,8 @@ def conditions(rgb: np.ndarray, mask: np.ndarray, other_canvas: np.ndarray, seed
     rng = np.random.default_rng(seed)
     f = rgb.astype(np.float32)
     out = {"original": rgb}
-    out["person_masked"] = compose(f, ~mask, flat(rgb.shape, (124, 116, 104)))  # only the surroundings remain
+    out["person_masked"] = compose(f, ~mask, flat(rgb.shape, (124, 116, 104)))  # the person becomes a flat blob: its SILHOUETTE stays
+    out["scene_only"] = canvas_of(rgb, mask)  # the person inpainted away: the surroundings alone, no silhouette
     out["person_only"] = compose(f, mask, flat(rgb.shape, NEUTRAL))  # a flat colour: a kind of background used in training
     out["bg_other"] = compose(f, mask, fit_to(other_canvas, rgb.shape))
     out["bg_texture"] = compose(f, mask, texture(rgb.shape, rng))

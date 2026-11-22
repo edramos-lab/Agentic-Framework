@@ -85,6 +85,7 @@ class ExperimentRequirements(BaseModel):
     colab: ColabConfig = Field(default_factory=ColabConfig)
     jetson: JetsonConfig = Field(default_factory=JetsonConfig)
     reuse_run_dir: str = ""  # folder of a finished run: experiments whose outputs it holds are not run again
+    reuse_rerun: list[str] = Field(default_factory=list)  # scripts to run again even though the finished run has their outputs
     dataset: DatasetSpec = Field(default_factory=DatasetSpec)
 
 

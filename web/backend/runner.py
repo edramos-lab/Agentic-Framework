@@ -137,9 +137,10 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
             os.environ[k] = v
 
         # LLM client
-        api_key = vault.get(
-            "OPENAI_API_KEY" if req.llm.provider == "openai" else "ANTHROPIC_API_KEY"
-        ) or ""
+        key_name = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}.get(req.llm.provider)
+        if key_name is None:
+            raise ValueError(f"unknown LLM provider {req.llm.provider!r}")
+        api_key = vault.get(key_name) or ""
         llm = LLMClient(
             provider=req.llm.provider,
             model=req.llm.model,
@@ -185,6 +186,7 @@ def _run_pipeline(run_id: str, req: PipelineStartRequest) -> None:
                 timeout_minutes=er.timeout_minutes,
                 backend=er.backend,
                 reuse_run_dir=_reuse_dir(er.reuse_run_id),
+                reuse_rerun=er.reuse_rerun,
                 dataset=DatasetSpec(**er.dataset.model_dump()),
                 jetson=_jetson_config(er),
                 colab=ColabConfig(

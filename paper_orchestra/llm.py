@@ -50,6 +50,12 @@ class LLMClient:
 
             self._anthropic = Anthropic(api_key=api_key, max_retries=5)
             self._openai = None
+        elif self.provider == "openrouter":  # one key, many models, through an OpenAI-compatible API
+            from openai import OpenAI
+
+            self._openai = OpenAI(api_key=api_key, base_url=base_url or "https://openrouter.ai/api/v1", max_retries=5,
+                                  default_headers={"HTTP-Referer": "https://github.com/edramos-lab/Agentic-Framework", "X-Title": "PaperOrchestra"})
+            self._anthropic = None
         else:
             from openai import OpenAI
 
@@ -75,6 +81,8 @@ class LLMClient:
 
         if self.provider == "anthropic":
             return self._chat_anthropic(messages, temp, mt)
+        if self.provider == "openrouter":
+            return self._chat_openrouter(messages, mt)
         return self._chat_openai(messages, temp, mt, response_format)
 
     def chat_json(
@@ -89,7 +97,7 @@ class LLMClient:
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"} if self.provider != "anthropic" else None,
+            response_format={"type": "json_object"} if self.provider not in ("anthropic", "openrouter") else None,
         )
         # Strip markdown code fences if present
         text = raw.strip()
@@ -125,6 +133,29 @@ class LLMClient:
             kwargs["response_format"] = response_format
         resp = self._openai.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
+
+    def _chat_openrouter(self, messages: list[dict[str, str]], max_tokens: int) -> str:
+        """Chat through OpenRouter.  No temperature or JSON mode is sent (not every model accepts them; the prompts ask for
+        JSON and chat_json tolerates stray text).  A model that reasons first can spend its token budget before it answers,
+        so the budget has a floor, and a reply that stops at the limit is continued instead of returned cut off."""
+        msgs = list(messages)
+        max_tokens = max(max_tokens, 12000)
+        text = ""
+        for _ in range(5):
+            resp = self._openai.chat.completions.create(model=self.model, messages=msgs, max_tokens=max_tokens)
+            choice = resp.choices[0]
+            part = choice.message.content or ""
+            text += part
+            if choice.finish_reason != "length":
+                break
+            logging.getLogger("paper_orchestra.llm").warning("Reply hit the token limit; continuing")
+            if part.strip():
+                msgs = [*msgs, {"role": "assistant", "content": text.rstrip()},
+                        {"role": "user", "content": "Your reply was cut off by the length limit. Continue exactly where it stopped: "
+                         "no repetition, no preamble, no commentary."}]
+            else:
+                max_tokens = min(max_tokens * 2, 64000)  # all of the budget went on reasoning: ask again with more room
+        return text
 
     def _chat_anthropic(
         self,

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 # Modules the experiment scripts import; they are uploaded with them and never planned as experiments of their own.
 HELPER_SCRIPTS = {
     "train_efficientvit.py", "stain_render.py", "int8_calibration.py", "kaggle_data.py", "zenodo_data.py", "data_source.py",
-    "imgprep.py", "stats_utils.py", "cvlib.py", "person_mask.py", "photo_conditions.py",
+    "imgprep.py", "stats_utils.py", "cvlib.py", "person_mask.py", "photo_conditions.py", "pose_audit.py",
 }
 
 
@@ -126,23 +126,27 @@ PHOTOS = Domain(
     outputs={
         "prepare_data.py": ["test_data.zip", "calib_data.zip", "split_info.json"],
         "dataset_audit.py": ["dataset_audit.json", "dataset_audit.png"],
+        "pose_benchmark.py": ["pose_benchmark.json", "pose_benchmark.png"],
+        "masked_segmentation.py": ["masked_segmentation.json"],
         "train_cv.py": ["cv_results.json", "selected.json", "test_results.json", "training_history.json", "model.pt", "model.onnx"],
         "shortcut_probe.py": ["probe_results.json"],
         "triton_benchmark.py": ["benchmark_results.json"],
     },
     targets={
-        "prepare_data.py": "colab", "dataset_audit.py": "colab", "train_cv.py": "colab",
+        "prepare_data.py": "colab", "dataset_audit.py": "colab", "pose_benchmark.py": "colab", "masked_segmentation.py": "colab", "train_cv.py": "colab",
         "shortcut_probe.py": "colab", "triton_benchmark.py": "jetson",
     },
     names={
         "prepare_data.py": "Download the dataset and split it",
         "dataset_audit.py": "Audit of the training images (background, person, metadata)",
+        "pose_benchmark.py": "Benchmark of body-keypoint detectors (MediaPipe Pose, RTMPose, ViTPose, Keypoint R-CNN): speed, availability, agreement, leg geometry",
+        "masked_segmentation.py": "Train segmentation networks on photographs with every person masked out: can they still tell the class?",
         "train_cv.py": "Compare backbones by session-aware cross-validation; fit and export the best",
         "shortcut_probe.py": "Probe baseline and background-randomised training out-of-fold",
     },
-    chain=("prepare_data.py", "dataset_audit.py", "train_cv.py", "shortcut_probe.py"),
+    chain=("prepare_data.py", "dataset_audit.py", "pose_benchmark.py", "masked_segmentation.py", "train_cv.py", "shortcut_probe.py"),
     needs={
-        "dataset_audit.py": ("prepare_data.py",), "train_cv.py": ("prepare_data.py",),
+        "dataset_audit.py": ("prepare_data.py",), "pose_benchmark.py": ("prepare_data.py",), "masked_segmentation.py": ("prepare_data.py",), "train_cv.py": ("prepare_data.py",),
         "shortcut_probe.py": ("prepare_data.py", "train_cv.py"),
         "triton_benchmark.py": ("prepare_data.py", "train_cv.py"),
     },
@@ -150,6 +154,7 @@ PHOTOS = Domain(
     required=("prepare_data.py", "train_cv.py"),
     figures={
         "dataset_audit": ("dataset_audit.py", "Per-class statistics of the training photographs (background lightness, share of the image covered by the person, file size, capture day) and the cross-validated accuracy of linear classifiers given only the background, only the person, only the metadata, or all of them."),
+        "pose_benchmark": ("pose_benchmark.py", "Body-keypoint detectors compared on the training photographs: how often both knees are found per class, median time per image, and the cross-validated accuracy of a linear classifier on each detector's leg geometry against the majority baseline."),
         "cv_comparison": ("train_cv.py", "Backbones compared by repeated session-aware cross-validation on the training images (balanced accuracy and macro-F1 with 95% bootstrap intervals), with the majority-class and frozen-embedding references."),
         "training_curves": ("train_cv.py", "Training and validation loss and accuracy per epoch of the selected backbone, averaged over the folds and repeats of the cross-validation."),
         "shortcut_probe": ("shortcut_probe.py", "Out-of-fold accuracy of the baseline and the background-randomised recipe with the person masked, on other backgrounds, on noise, in grayscale and blurred; hatched bars are backgrounds never used in training."),
@@ -163,6 +168,8 @@ produces the data in the figure's "data_source" (e.g. "exp1") and use these figu
   roc_curve          one-vs-rest ROC curves with AUC                  (same experiment)
   dataset_audit      statistics of the background, the person and the file metadata, and what linear classifiers
                      learn from each (needs dataset_audit.py)
+  pose_benchmark     keypoint detectors compared: detection rates, time per image and the classifier on each
+                     detector's leg geometry (needs pose_benchmark.py)
   cv_comparison      the backbones compared by cross-validation, with the reference rows (needs train_cv.py)
   training_curves    cross-validation training/validation curves of the selected backbone (train_cv.py)
   shortcut_probe     out-of-fold accuracy of the baseline and the background-randomised recipe with the person
@@ -173,6 +180,8 @@ If Colab training is available (see the requirements below), the experiments run
   prepare_data.py      "colab"   downloads the dataset, splits it, packs the Jetson's test and calibration images
                        expected_outputs ["test_data.zip", "calib_data.zip", "split_info.json"]
   dataset_audit.py     "colab"   audit of the training images before any model is trained; depends_on the dataset experiment
+  pose_benchmark.py    "colab"   benchmark of body-keypoint detectors (MediaPipe Pose, RTMPose, ViTPose and the Keypoint R-CNN
+                       reference) on the training images; runs BEFORE the training; depends_on the dataset experiment
   train_cv.py          "colab"   backbones compared by session-aware cross-validation on the training images; fits and
                        exports the best and scores the test images once; depends_on the dataset experiment
   shortcut_probe.py    "colab"   baseline vs background-randomised training, probed out-of-fold; depends_on the dataset
@@ -180,8 +189,8 @@ If Colab training is available (see the requirements below), the experiments run
   triton_benchmark.py  "jetson"  benchmarks the selected model; depends_on the dataset and train_cv.py experiments
 Plan the figures above for them (one of each), placed in the experiments/results sections.  Image montages are never
 planned: the photographs show people.  The research question about whether the model reads the subject or the
-surroundings is answered from dataset_audit.py (what the background and the metadata carry) and shortcut_probe.py (what
-the models rely on), never from anything else.
+surroundings is answered from dataset_audit.py and pose_benchmark.py (what the background, the metadata, the framing and the
+leg geometry carry) and shortcut_probe.py (what the models rely on), never from anything else.
 ''',
     writer_notes='''
 Photographs, shortcuts and small data:
@@ -196,12 +205,38 @@ Photographs, shortcuts and small data:
 - "dataset_audit" holds statistics before any training: Kruskal-Wallis tests, and linear classifiers given only the
   background, only the person, or only the file metadata, each with a permutation test.  Report what each measured; a
   classifier at the majority baseline means that feature set carries no class information.
+- "pose_benchmark" compares body-keypoint detectors (MediaPipe Pose, RTMPose-m and -x, ViTPose-B and ViTPose+-H, with Keypoint R-CNN
+  as the reference) on the same training photographs.  There is NO keypoint ground truth, so it does not measure keypoint
+  accuracy and you must not call any detector "more accurate".  It measures: time per image (person finding included; ViTPose
+  uses the Keypoint R-CNN person box and its time includes that step; each entry names the device it ran on, and MediaPipe runs
+  on the CPU, so say that its time is not comparable with the GPU ones); how often both knees, ankles and hips are found per
+  class at each detector's own confidence threshold (the scores mean different things, so the thresholds differ: say so);
+  whether finding the knees and ankles depends on the class (a framing cue); the agreement between detectors (median distance
+  in pixels at a 512-pixel image height, and the rank correlation of the leg measures), which shows that they locate the same
+  joints and not that the joints are right; and the leg geometry per class with a cross-validated linear classifier on the
+  images in which all lower-leg keypoints were found, against the majority baseline of those images.  Quote the images per class
+  that entered each classifier.  Keypoint errors of a few pixels are comparable to the angles that separate varus and valgus
+  from normal, so nothing here is a clinical measurement, and the detectors have no heel or foot points.
 - "probe_results" holds two recipes ("baseline", "augmented": background randomisation in training) evaluated out-of-fold
   under conditions of the photographs.  Only the conditions marked "held_out" use backgrounds never used in training.  The
   backgrounds are synthetic compositions, not real rooms; say so.  Quote each recipe's verdict, the comparison verdict, the
   intervals and the McNemar p-values; do not call a difference real when its interval or p-value does not support it.
 - "agreement_with_colab_test_predictions", when present in the benchmark results, says how many Jetson predictions equal the
   predictions of the trained PyTorch model on the same test images; report disagreement if there is any.
+- Reading the probe:
+  * "person_masked" replaces the person by a flat colour, so the person's silhouette (size, position, shape) stays in the
+    image; accuracy above the majority baseline there can come from the silhouette and is not evidence that the room carries
+    class information (the audit says whether it does).  "scene_only", when present, removes the person by inpainting.
+  * "person_box_crop" removes the person's scale and position in the frame but keeps the box's aspect ratio; never say it
+    removes the framing.
+  * The verdict "robust to the tested changes" means accuracy survives the removal or replacement of the background and colour; it
+    does not show that the model reads the legs, because silhouette and aspect ratio remain.  Say exactly that.
+  * Report the baseline's loss under a condition (for example on noise or in grayscale) as brittleness to that change, with the
+    interval and p-value.
+- A backbone at chance (balanced accuracy near the majority baseline and an AUC near 0.5) did not train under the shared
+  recipe; say so.  Do not conclude that its architecture is unsuitable, and do not rank architectures whose intervals overlap.
+- A linear classifier on a handful of audit features can match or beat fine-tuned networks; compare them only with the caveat
+  that the two use different folds.
 - The Jetson benchmarks the model selected by cross-validation; no other model was deployed.
 ''',
     preprocess="letterbox",

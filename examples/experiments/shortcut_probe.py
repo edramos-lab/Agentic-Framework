@@ -6,11 +6,14 @@ training image gets a new background: a flat colour, a gradient, or the scene of
 training image is classified by models that never saw it, under these conditions:
 
   original       the photograph as it is
-  person_masked  the person painted out; only the surroundings remain
+  person_masked  the person replaced by a flat colour: the surroundings remain AND so does the person's silhouette (its size,
+                 position and shape), so accuracy here can come from the silhouette, not from the room
+  scene_only     the person inpainted away: the surroundings alone, with no silhouette
   person_only    the person on a flat grey (a kind of background used in training)
   bg_other       the person on the scene of a different image the model never trained on (held out)
   bg_texture     the person on coloured noise (held out)
-  person_box_crop  cropped to the person's bounding box: the camera distance and framing are removed
+  person_box_crop  cropped to the person's bounding box: the person's scale and position in the frame are removed; the
+                 box's aspect ratio (a strong class cue in the audit) is NOT
   grayscale      the photograph without colour
   blur           the photograph blurred (Gaussian, sigma 4)
 
@@ -21,9 +24,12 @@ part of the decision rule below.
 Decision rule per recipe (written before the run).  orig = accuracy on the original images, base = the share of the largest
 class in the training pool, held = mean accuracy on the held-out backgrounds (bg_other, bg_texture):
   inconclusive          orig <= base + 0.10 (nothing to probe)
-  person-driven         person_only >= 0.9 * orig AND held >= 0.9 * orig AND person_masked <= base + 0.10
-  background-reliant    person_masked > base + 0.15 OR held < 0.7 * orig
+  robust to the tested changes   person_only >= 0.9 * orig AND held >= 0.9 * orig AND bgonly <= base + 0.10
+  background-reliant    bgonly > base + 0.15 OR held < 0.7 * orig
   mixed                 otherwise
+where bgonly is scene_only when it was computed (rule v2) and person_masked otherwise (rule v1, which the first
+lower-limb run used).  "Robust to the tested changes" does not mean the model reads the legs: the person's silhouette and the
+box's aspect ratio stay in every condition except scene_only.
 Comparison: the augmentation "removed a background dependence" when the baseline is background-reliant and the augmented
 recipe is not, or when it keeps at least 0.10 more of its accuracy on the held-out backgrounds than the baseline with a
 paired-bootstrap interval that excludes 0.  Statistics: 95% bootstrap intervals; exact McNemar tests (original vs each
@@ -77,15 +83,17 @@ def verdict(acc: dict[str, float], base: float) -> dict:
     held = float(np.mean([acc[c] for c in HELD_OUT]))
     keeps = {"person_only": acc["person_only"] / orig, "held_out_backgrounds": held / orig}
     weak = orig <= base + 0.10
-    person = keeps["person_only"] >= 0.9 and keeps["held_out_backgrounds"] >= 0.9 and acc["person_masked"] <= base + 0.10
-    reliant = acc["person_masked"] > base + 0.15 or keeps["held_out_backgrounds"] < 0.7
+    bgonly = acc.get("scene_only", acc["person_masked"])  # rule v2 uses the condition without the silhouette
+    person = keeps["person_only"] >= 0.9 and keeps["held_out_backgrounds"] >= 0.9 and bgonly <= base + 0.10
+    reliant = bgonly > base + 0.15 or keeps["held_out_backgrounds"] < 0.7
     return {"majority_baseline": round(base, 4), "original_accuracy": round(orig, 4), "person_masked_accuracy": round(acc["person_masked"], 4),
             "person_only_accuracy": round(acc["person_only"], 4), "mean_held_out_background_accuracy": round(held, 4),
+            "scene_only_accuracy": round(acc["scene_only"], 4) if "scene_only" in acc else None,
             "person_box_crop_accuracy": round(acc["person_box_crop"], 4),
             "grayscale_accuracy": round(acc["grayscale"], 4), "blur_accuracy": round(acc["blur"], 4),
             "retained_fraction": {k: round(v, 4) for k, v in keeps.items()},
             "verdict": "inconclusive (original accuracy is not above the majority baseline)" if weak
-            else "person-driven" if person else ("background-reliant" if reliant else "mixed")}
+            else "robust to the tested changes" if person else ("background-reliant" if reliant else "mixed")}
 
 
 def main() -> None:
@@ -164,7 +172,7 @@ def main() -> None:
                                          "difference": round(float(diff.mean()), 4), "difference_ci95": [round(float(lo), 4), round(float(hi), 4)]},
         "verdict": ("inconclusive: a recipe does not beat the majority baseline" if "inconclusive" in vb + va_
                     else "the background randomisation removed a background dependence that the baseline had" if removed
-                    else "both recipes are person-driven; the background randomisation was not needed" if vb == va_ == "person-driven"
+                    else "both recipes are robust to the tested changes; the background randomisation was not needed" if vb == va_ == "robust to the tested changes"
                     else "both recipes depend on the background; the randomisation did not remove it" if vb == va_ == "background-reliant"
                     else "no clear difference between the recipes")}
     Path("probe_results.json").write_text(json.dumps(results, indent=2))

@@ -14,7 +14,7 @@ import {
 } from "../components/ui";
 
 const GPU_OPTIONS = ["T4", "L4", "G4", "H100", "A100"];
-const PROVIDERS = ["openai", "anthropic"];
+const PROVIDERS = ["openai", "anthropic", "openrouter"];
 
 function Section({ title, description, children }) {
   return (
@@ -518,7 +518,7 @@ export default function NewRun() {
             label="Model"
             value={llm.model}
             onChange={upLlm("model")}
-            placeholder="gpt-4o / claude-sonnet-4-20250514"
+            placeholder="gpt-4o / claude-sonnet-5-5 / (openrouter) anthropic/claude-sonnet-5.5"
           />
           <Input
             label="Temperature"
